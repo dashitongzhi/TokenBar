@@ -1,0 +1,7 @@
+{
+  "platform": "openai",
+  "displayName": "OpenAI",
+  "category": "AI & API",
+  "symbolName": "brain.head.profile",
+  "unit": "tokens"
+}

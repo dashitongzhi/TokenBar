@@ -1,0 +1,7 @@
+{
+  "platform": "stripe",
+  "displayName": "Stripe",
+  "category": "Payments",
+  "symbolName": "creditcard.fill",
+  "unit": "events"
+}

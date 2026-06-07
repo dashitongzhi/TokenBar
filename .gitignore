@@ -1,0 +1,18 @@
+.build/
+DerivedData/
+*.xcuserstate
+.DS_Store
+
+# Local assistant/editor state.
+.claude/
+.codex/
+
+# Local notes and internal planning docs. README stays public.
+docs/
+index.md
+STATUSBAR_FEATURE.md
+PHASE*_SUMMARY.md
+FINAL_SUMMARY.md
+
+# Local screenshots or generated root-level images.
+/*.png

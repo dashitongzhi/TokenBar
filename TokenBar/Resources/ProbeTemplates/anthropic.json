@@ -1,0 +1,7 @@
+{
+  "platform": "anthropic",
+  "displayName": "Anthropic",
+  "category": "AI & API",
+  "symbolName": "sparkles",
+  "unit": "tokens"
+}
