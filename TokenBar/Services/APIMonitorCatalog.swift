@@ -17,7 +17,7 @@ enum APIMonitorCatalog {
             ),
             costRequest: APIRequestTemplate(
                 method: "GET",
-                url: "https://api.openai.com/v1/organization/costs?start_time={unix_start}&end_time={unix_end}&limit=31",
+                url: "https://api.openai.com/v1/organization/costs?start_time={unix_start}&end_time={unix_end}&bucket_width=1d&limit=31",
                 headers: ["Authorization: Bearer {OPENAI_ADMIN_KEY}", "Content-Type: application/json"],
                 body: nil
             ),

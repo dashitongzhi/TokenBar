@@ -73,6 +73,7 @@ private struct GeneralSettingsView: View {
 
             Section {
                 Toggle(appState.localized("mcp"), isOn: $appState.localAPIEnabled)
+                LocalAPIStatusRow()
                 Text(appState.localized("mcpCaption"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -82,6 +83,34 @@ private struct GeneralSettingsView: View {
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+private struct LocalAPIStatusRow: View {
+    @EnvironmentObject private var appState: AppState
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 8) {
+            Image(systemName: appState.localAPIStatus.symbolName)
+                .foregroundStyle(appState.localAPIStatus.color)
+                .frame(width: 18)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(appState.localAPIStatusTitle)
+                    .font(.caption.weight(.semibold))
+                Text(appState.localAPIStatusDetail)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer()
+
+            Text(appState.localAPISummaryValue)
+                .font(.caption.monospacedDigit().weight(.medium))
+                .foregroundStyle(appState.localAPIStatus.color)
+        }
+        .padding(.vertical, 2)
     }
 }
 
@@ -134,9 +163,11 @@ private struct PlatformSettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text(appState.localized("demoData"))
+            Text(appState.localized("liveUsageCaption"))
                 .font(.callout)
                 .foregroundStyle(.secondary)
+
+            OpenAIAdminKeyPanel()
 
             List {
                 Section(appState.localized("platforms")) {
@@ -152,8 +183,12 @@ private struct PlatformSettingsView: View {
                                     .foregroundStyle(.secondary)
                             }
                             Spacer()
-                            Text("$\(appState.formatMoney(provider.spendMonth))")
-                                .monospacedDigit()
+                            VStack(alignment: .trailing, spacing: 4) {
+                                SourcePill(source: provider.sourceKind)
+                                Text("$\(appState.formatMoney(provider.spendMonth))")
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                     }
                 }
@@ -170,5 +205,105 @@ private struct PlatformSettingsView: View {
             }
         }
         .padding()
+    }
+}
+
+private struct OpenAIAdminKeyPanel: View {
+    @EnvironmentObject private var appState: AppState
+    @State private var adminKey = ""
+    @State private var message = ""
+    @State private var isSaving = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label(appState.localized("openAILiveUsage"), systemImage: "brain.head.profile")
+                    .font(.headline)
+                Spacer()
+                if let openAI = appState.providers.first(where: { $0.id == "openai" }) {
+                    SourcePill(source: openAI.sourceKind)
+                }
+            }
+
+            HStack(spacing: 8) {
+                SecureField(appState.localized("openAIAdminKey"), text: $adminKey)
+                    .textFieldStyle(.roundedBorder)
+
+                Button {
+                    save()
+                } label: {
+                    Label(appState.localized("save"), systemImage: "key.fill")
+                }
+                .disabled(isSaving || adminKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                Button {
+                    clear()
+                } label: {
+                    Label(appState.localized("clear"), systemImage: "trash")
+                }
+                .disabled(isSaving)
+
+                Button {
+                    appState.refreshAll()
+                } label: {
+                    Label(appState.localized("refresh"), systemImage: "arrow.clockwise")
+                }
+                .disabled(appState.isRefreshingUsage)
+            }
+
+            if message.isEmpty == false {
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if let openAI = appState.providers.first(where: { $0.id == "openai" }) {
+                Text(openAI.sourceDescription)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(14)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func save() {
+        let trimmed = adminKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else { return }
+        isSaving = true
+        Task {
+            do {
+                try await appState.storeOpenAIAdminKey(trimmed)
+                await MainActor.run {
+                    adminKey = ""
+                    message = appState.localized("openAIKeySaved")
+                    isSaving = false
+                }
+            } catch {
+                await MainActor.run {
+                    message = error.localizedDescription
+                    isSaving = false
+                }
+            }
+        }
+    }
+
+    private func clear() {
+        isSaving = true
+        Task {
+            do {
+                try await appState.clearOpenAIAdminKey()
+                await MainActor.run {
+                    message = appState.localized("openAIKeyCleared")
+                    isSaving = false
+                }
+            } catch {
+                await MainActor.run {
+                    message = error.localizedDescription
+                    isSaving = false
+                }
+            }
+        }
     }
 }

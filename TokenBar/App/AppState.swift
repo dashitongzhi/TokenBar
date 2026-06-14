@@ -74,7 +74,10 @@ final class AppState: ObservableObject {
     }
 
     @Published var localAPIEnabled: Bool {
-        didSet { savePreferencesAndNotify() }
+        didSet {
+            savePreferencesAndNotify()
+            LocalAPIServer.shared.syncWithPreference()
+        }
     }
 
     @Published var selectedAppIcon: AppIconChoice {
@@ -113,9 +116,12 @@ final class AppState: ObservableObject {
     @Published private(set) var recentDecisions: [PolicyDecision] = []
     @Published private(set) var auditEvents: [AuditEvent] = []
     @Published private(set) var lastRefresh: Date = .now
+    @Published private(set) var isRefreshingUsage = false
+    @Published private(set) var localAPIStatus: LocalAPIStatus = .stopped
 
     private let preferences = UserDefaults.standard
     private let storeURL: URL
+    private let openAIUsageService = OpenAIUsageService()
 
     private init() {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory
@@ -139,7 +145,7 @@ final class AppState: ObservableObject {
         localAPIEnabled = preferences.object(forKey: "localAPIEnabled") as? Bool ?? true
         selectedAppIcon = AppIconChoice(rawValue: preferences.string(forKey: "selectedAppIcon") ?? "") ?? .classic
 
-        providers = Self.loadProviders(from: storeURL) ?? Self.seedProviders()
+        providers = Self.normalizedProviders(Self.loadProviders(from: storeURL) ?? Self.seedProviders())
         workspacePolicies = Self.seedWorkspacePolicies()
         auditEvents = Self.seedAudit()
         rebuildPolicyInput()
@@ -178,6 +184,14 @@ final class AppState: ObservableObject {
         providers.reduce(0) { $0 + $1.spendToday }
     }
 
+    var liveProviderCount: Int {
+        providers.filter(\.isLive).count
+    }
+
+    var unsupportedProviderCount: Int {
+        providers.filter { $0.sourceKind == .unsupported || $0.sourceKind == .liveUnavailable || $0.sourceKind == .error }.count
+    }
+
     var mostUrgentProvider: ProviderUsage? {
         providers.sorted {
             if $0.status != $1.status {
@@ -212,7 +226,7 @@ final class AppState: ObservableObject {
             title: localized("monthly"),
             spend: totalSpendMonth,
             tokens: providers.reduce(0) { $0 + $1.current },
-            requests: providers.reduce(0) { $0 + Int($1.current / max($1.limit, 1) * 1200) },
+            requests: providers.reduce(0) { $0 + $1.requestCount },
             projectedSpend: totalSpendToday * 30
         )
     }
@@ -233,27 +247,82 @@ final class AppState: ObservableObject {
         L10n.t(key, language)
     }
 
+    var localAPIStatusTitle: String {
+        switch localAPIStatus {
+        case .disabled:
+            localized("localAPIDisabled")
+        case .starting:
+            localized("localAPIStarting")
+        case .running:
+            localized("localAPIRunning")
+        case .stopped:
+            localized("localAPIStopped")
+        case .failed:
+            localized("localAPIFailed")
+        }
+    }
+
+    var localAPIStatusDetail: String {
+        switch localAPIStatus {
+        case .disabled:
+            localized("localAPIDisabledDetail")
+        case .starting(let port):
+            String(format: localized("localAPIStartingDetail"), port)
+        case .running(let port):
+            String(format: localized("localAPIRunningDetail"), port)
+        case .stopped:
+            localized("localAPIStoppedDetail")
+        case .failed(let message):
+            message.isEmpty ? localized("localAPIFailedDetail") : message
+        }
+    }
+
+    var localAPISummaryValue: String {
+        switch localAPIStatus {
+        case .running(let port), .starting(let port):
+            "\(port)"
+        case .disabled:
+            localized("off")
+        case .stopped:
+            localized("stopped")
+        case .failed:
+            localized("failed")
+        }
+    }
+
+    func setLocalAPIStatus(_ status: LocalAPIStatus) {
+        guard localAPIStatus != status else { return }
+        localAPIStatus = status
+        notifyStatusBarUpdate()
+    }
+
     func refreshAll() {
-        for index in providers.indices {
-            providers[index].simulateRefresh()
-        }
+        guard isRefreshingUsage == false else { return }
+        isRefreshingUsage = true
 
-        if focusModeEnabled {
-            sessionSpend = min(sessionSpend + Double.random(in: 0.03...0.25), max(sessionBudget * 1.3, sessionBudget + 1))
+        Task {
+            let result = await openAIUsageService.refresh()
+            apply(openAIResult: result)
         }
-        for index in workspacePolicies.indices {
-            workspacePolicies[index].spendToday = min(
-                workspacePolicies[index].spendToday + Double.random(in: 0.05...0.45),
-                max(workspacePolicies[index].dailyBudget * 1.2, workspacePolicies[index].dailyBudget + 0.5)
+    }
+
+    func storeOpenAIAdminKey(_ key: String) async throws {
+        try await KeychainService.shared.store(value: key, for: "OPENAI_ADMIN_KEY")
+        addAudit(provider: "OpenAI", action: "key.store", detail: "Stored OpenAI admin key in Keychain")
+        refreshAll()
+    }
+
+    func clearOpenAIAdminKey() async throws {
+        try await KeychainService.shared.delete(key: "OPENAI_ADMIN_KEY")
+        addAudit(provider: "OpenAI", action: "key.delete", detail: "Removed OpenAI admin key from Keychain")
+        if let index = providers.firstIndex(where: { $0.id == "openai" }) {
+            providers[index].markSource(
+                .liveUnavailable,
+                detail: "OpenAI live usage requires OPENAI_ADMIN_KEY in Keychain or the app environment.",
+                clearUsage: true
             )
-            workspacePolicies[index].spendMonth += Double.random(in: 0.15...1.4)
         }
-        currentDecision = evaluatePolicy(input: currentPolicyInput, shouldRecord: false)
-
-        lastRefresh = .now
-        addAudit(provider: localized("allProviders"), action: "refresh", detail: "Refreshed local usage and policy metadata")
         persistProviders()
-        NotificationService.shared.notifyIfNeeded(appState: self)
         notifyStatusBarUpdate()
     }
 
@@ -415,18 +484,30 @@ final class AppState: ObservableObject {
             var metric: [String: Any] = [
                 "name": provider.unit,
                 "current": provider.current,
-                "limit": provider.limit,
+                "limit": provider.hasKnownQuotaLimit ? provider.limit : NSNull(),
                 "unit": provider.unit,
-                "remaining": provider.remaining,
+                "remaining": provider.knownRemaining ?? NSNull(),
                 "usageRatio": provider.usageRatio,
                 "burnRatePerHour": provider.burnRatePerHour,
-                "resetAt": ISO8601DateFormatter().string(from: provider.resetAt)
+                "resetAt": ISO8601DateFormatter().string(from: provider.resetAt),
+                "dataSource": provider.sourceKind.rawValue,
+                "sourceDetail": provider.sourceDescription,
+                "sourceUpdatedAt": provider.sourceUpdatedAt.map { ISO8601DateFormatter().string(from: $0) } ?? NSNull(),
+                "quotaLimitKnown": provider.hasKnownQuotaLimit,
+                "tokensToday": provider.todayTokenCount,
+                "requestsToday": provider.todayRequestCount,
+                "requestsMonth": provider.requestCount,
+                "spendToday": provider.spendToday,
+                "spendMonth": provider.spendMonth,
+                "currency": provider.displayCurrency
             ]
             metric["predictedExhaustion"] = provider.predictedExhaustion.map { ISO8601DateFormatter().string(from: $0) } ?? NSNull()
             return [
                 "platform": provider.id,
                 "displayName": provider.name,
                 "status": provider.status.rawValue,
+                "dataSource": provider.sourceKind.rawValue,
+                "sourceDetail": provider.sourceDescription,
                 "metrics": [metric]
             ] as [String: Any]
         }
@@ -447,8 +528,18 @@ final class AppState: ObservableObject {
             "platform": provider.id,
             "displayName": provider.name,
             "status": provider.status.rawValue,
+            "dataSource": provider.sourceKind.rawValue,
+            "sourceDetail": provider.sourceDescription,
             "burnRatePerHour": provider.burnRatePerHour,
-            "remaining": provider.remaining,
+            "remaining": provider.knownRemaining ?? NSNull(),
+            "quotaLimitKnown": provider.hasKnownQuotaLimit,
+            "tokensToday": provider.todayTokenCount,
+            "tokensMonth": provider.current,
+            "requestsToday": provider.todayRequestCount,
+            "requestsMonth": provider.requestCount,
+            "spendToday": provider.spendToday,
+            "spendMonth": provider.spendMonth,
+            "currency": provider.displayCurrency,
             "predictedExhaustion": provider.predictedExhaustion.map { ISO8601DateFormatter().string(from: $0) } ?? NSNull(),
             "recommendation": insightText()
         ]
@@ -603,6 +694,50 @@ final class AppState: ObservableObject {
         currentDecision = evaluatePolicy(input: currentPolicyInput, shouldRecord: false)
     }
 
+    private func apply(openAIResult result: OpenAIUsageRefreshResult) {
+        defer {
+            lastRefresh = .now
+            isRefreshingUsage = false
+            currentDecision = evaluatePolicy(input: currentPolicyInput, shouldRecord: false)
+            persistProviders()
+            NotificationService.shared.notifyIfNeeded(appState: self)
+            notifyStatusBarUpdate()
+        }
+
+        ensureOpenAIProviderExists()
+        guard let index = providers.firstIndex(where: { $0.id == "openai" }) else { return }
+
+        switch result {
+        case .success(let snapshot):
+            providers[index].apply(snapshot: snapshot)
+            addAudit(provider: "OpenAI", action: "usage.live", detail: "Fetched \(Int(snapshot.tokenTotal)) tokens, \(snapshot.requestCountMonth) requests, and \(snapshot.currency.uppercased()) \(formatMoney(snapshot.spendMonth)) month-to-date")
+        case .unavailable(let detail):
+            providers[index].markSource(.liveUnavailable, detail: detail, clearUsage: true)
+            addAudit(provider: "OpenAI", action: "usage.needs_key", detail: "Live usage refresh skipped because no admin key is available")
+        case .failure(let detail):
+            providers[index].markSource(.error, detail: detail)
+            addAudit(provider: "OpenAI", action: "usage.error", detail: detail)
+        }
+    }
+
+    private func ensureOpenAIProviderExists() {
+        guard providers.contains(where: { $0.id == "openai" }) == false else { return }
+        providers.insert(Self.provider(
+            id: "openai",
+            name: "OpenAI",
+            category: "AI & API",
+            symbol: "brain.head.profile",
+            current: 0,
+            limit: 0,
+            unit: "tokens",
+            spendToday: 0,
+            spendMonth: 0,
+            resetHours: 24 * 30,
+            dataSource: .liveUnavailable,
+            sourceDetail: "OpenAI live usage requires OPENAI_ADMIN_KEY in Keychain or the app environment."
+        ), at: 0)
+    }
+
     private func fallbackName(_ providerID: String?) -> String {
         guard let providerID, let provider = providers.first(where: { $0.id == providerID }) else {
             return "a cheaper allowed provider"
@@ -631,8 +766,8 @@ final class AppState: ObservableObject {
 
     private func usageSummary(id: String, title: String, multiplier: Double, requestDivisor: Double) -> UsageSummary {
         let spend = totalSpendToday * multiplier
-        let tokens = providers.reduce(0) { $0 + ($1.burnRatePerHour * 24 * multiplier) }
-        let requests = providers.reduce(0) { $0 + Int(($1.current / max($1.limit, 1)) * 350 * multiplier / requestDivisor) }
+        let tokens = providers.reduce(0) { $0 + ($1.todayTokenCount > 0 ? $1.todayTokenCount * multiplier : $1.burnRatePerHour * 24 * multiplier) }
+        let requests = providers.reduce(0) { $0 + Int(Double($1.todayRequestCount) * multiplier / requestDivisor) }
         return UsageSummary(id: id, title: title, spend: spend, tokens: tokens, requests: requests, projectedSpend: spend * 1.12)
     }
 
@@ -651,11 +786,24 @@ final class AppState: ObservableObject {
 
     private static func seedProviders() -> [ProviderUsage] {
         [
-            provider(id: "openai", name: "OpenAI", category: "AI & API", symbol: "brain.head.profile", current: 6_820, limit: 10_000, unit: "tokens", spendToday: 4.18, spendMonth: 72.40, resetHours: 42),
-            provider(id: "anthropic", name: "Anthropic", category: "AI & API", symbol: "sparkles", current: 8_870, limit: 10_000, unit: "tokens", spendToday: 7.32, spendMonth: 116.22, resetHours: 18),
-            provider(id: "cursor", name: "Cursor", category: "AI Tool", symbol: "cursorarrow.motionlines", current: 58, limit: 100, unit: "requests", spendToday: 1.80, spendMonth: 24.00, resetHours: 9),
-            provider(id: "github", name: "GitHub Copilot", category: "Developer Tool", symbol: "chevron.left.forwardslash.chevron.right", current: 41, limit: 100, unit: "requests", spendToday: 0.62, spendMonth: 10.00, resetHours: 26),
-            provider(id: "stripe", name: "Stripe", category: "Payments", symbol: "creditcard.fill", current: 1_250, limit: 5_000, unit: "events", spendToday: 0.40, spendMonth: 18.10, resetHours: 120)
+            provider(
+                id: "openai",
+                name: "OpenAI",
+                category: "AI & API",
+                symbol: "brain.head.profile",
+                current: 0,
+                limit: 0,
+                unit: "tokens",
+                spendToday: 0,
+                spendMonth: 0,
+                resetHours: 24 * 30,
+                dataSource: .liveUnavailable,
+                sourceDetail: "OpenAI live usage requires OPENAI_ADMIN_KEY in Keychain or the app environment."
+            ),
+            provider(id: "anthropic", name: "Anthropic", category: "AI & API", symbol: "sparkles", current: 0, limit: 10_000, unit: "tokens", spendToday: 0, spendMonth: 0, resetHours: 24 * 30),
+            provider(id: "cursor", name: "Cursor", category: "AI Tool", symbol: "cursorarrow.motionlines", current: 0, limit: 100, unit: "requests", spendToday: 0, spendMonth: 0, resetHours: 24 * 30),
+            provider(id: "github", name: "GitHub Copilot", category: "Developer Tool", symbol: "chevron.left.forwardslash.chevron.right", current: 0, limit: 100, unit: "requests", spendToday: 0, spendMonth: 0, resetHours: 24 * 30),
+            provider(id: "stripe", name: "Stripe", category: "Payments", symbol: "creditcard.fill", current: 0, limit: 5_000, unit: "events", spendToday: 0, spendMonth: 0, resetHours: 24 * 30)
         ]
     }
 
@@ -706,11 +854,22 @@ final class AppState: ObservableObject {
         ]
     }
 
-    private static func provider(id: String, name: String, category: String, symbol: String, current: Double, limit: Double, unit: String, spendToday: Double, spendMonth: Double, resetHours: Double) -> ProviderUsage {
+    private static func provider(
+        id: String,
+        name: String,
+        category: String,
+        symbol: String,
+        current: Double,
+        limit: Double,
+        unit: String,
+        spendToday: Double,
+        spendMonth: Double,
+        resetHours: Double,
+        dataSource: UsageDataSource = .unsupported,
+        sourceDetail: String? = nil
+    ) -> ProviderUsage {
         let now = Date()
-        let history = (0..<8).map { offset in
-            UsagePoint(timestamp: now.addingTimeInterval(Double(offset - 7) * 3600), value: max(current - Double(7 - offset) * Double.random(in: 24...120), 0))
-        }
+        let history = [UsagePoint(timestamp: now, value: current)]
         return ProviderUsage(
             id: id,
             name: name,
@@ -723,15 +882,48 @@ final class AppState: ObservableObject {
             spendMonth: spendMonth,
             resetAt: now.addingTimeInterval(resetHours * 3600),
             lastUpdated: now,
-            history: history
+            history: history,
+            dataSource: dataSource,
+            sourceDetail: sourceDetail ?? "TokenBar does not have a live adapter for this provider yet.",
+            sourceUpdatedAt: now
         )
+    }
+
+    private static func normalizedProviders(_ providers: [ProviderUsage]) -> [ProviderUsage] {
+        providers.map { provider in
+            var normalized = provider
+            if normalized.id == "openai" {
+                normalized.quotaLimitKnown = normalized.dataSource == .live ? false : normalized.quotaLimitKnown ?? false
+                if normalized.dataSource != .live {
+                    let source = normalized.sourceKind == .error ? UsageDataSource.error : UsageDataSource.liveUnavailable
+                    let detail = normalized.sourceKind == .error && normalized.sourceDescription.isEmpty == false
+                        ? normalized.sourceDescription
+                        : "OpenAI live usage requires OPENAI_ADMIN_KEY in Keychain or the app environment."
+                    normalized.markSource(source, detail: detail, clearUsage: true)
+                }
+                if normalized.dataSource == nil {
+                    normalized.markSource(
+                        .liveUnavailable,
+                        detail: "OpenAI live usage requires OPENAI_ADMIN_KEY in Keychain or the app environment.",
+                        clearUsage: true
+                    )
+                }
+            } else if normalized.dataSource == nil || normalized.sourceKind != .unsupported {
+                normalized.markSource(
+                    .unsupported,
+                    detail: "TokenBar does not have a live adapter for this provider yet.",
+                    clearUsage: normalized.dataSource == nil
+                )
+            }
+            return normalized
+        }
     }
 
     private static func seedAudit() -> [AuditEvent] {
         [
-            AuditEvent(timestamp: .now.addingTimeInterval(-420), provider: "OpenAI", action: "usage.read", detail: "Read aggregate billing metadata"),
-            AuditEvent(timestamp: .now.addingTimeInterval(-900), provider: "Anthropic", action: "usage.read", detail: "Read token counts and reset windows"),
-            AuditEvent(timestamp: .now.addingTimeInterval(-1400), provider: "Keychain", action: "key.lookup", detail: "Looked up provider credential handle only")
+            AuditEvent(timestamp: .now.addingTimeInterval(-420), provider: "OpenAI", action: "usage.needs_key", detail: "Live usage starts after OPENAI_ADMIN_KEY is available"),
+            AuditEvent(timestamp: .now.addingTimeInterval(-900), provider: "Providers", action: "usage.unsupported", detail: "Non-OpenAI providers are visible but not live yet"),
+            AuditEvent(timestamp: .now.addingTimeInterval(-1400), provider: "Keychain", action: "key.lookup", detail: "Keychain stores credential handles locally")
         ]
     }
 }

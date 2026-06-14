@@ -318,19 +318,19 @@ private struct IntegrationsOverviewView: View {
             VStack(alignment: .leading, spacing: 16) {
                 HStack(spacing: 14) {
                     SummaryTile(
-                        title: appState.localized("automaticMonitoring"),
-                        value: "\(appState.automaticMonitorCount)",
+                        title: appState.localized("liveData"),
+                        value: "\(appState.liveProviderCount)",
                         symbol: "checkmark.seal.fill"
                     )
                     SummaryTile(
-                        title: appState.localized("needsConsole"),
-                        value: "\(appState.warningMonitorCount)",
+                        title: appState.localized("unsupportedProviders"),
+                        value: "\(appState.unsupportedProviderCount)",
                         symbol: "exclamationmark.triangle.fill"
                     )
                     SummaryTile(
                         title: appState.localized("localAPI"),
-                        value: "3847",
-                        symbol: "network"
+                        value: appState.localAPISummaryValue,
+                        symbol: appState.localAPIStatus.symbolName
                     )
                 }
 
@@ -365,13 +365,25 @@ private struct APIMonitorCard: View {
                         .foregroundStyle(spec.capability.status.color)
                 }
                 Spacer()
-                Text(spec.capability.title(language: appState.language))
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(spec.capability.status.color)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(spec.capability.status.color.opacity(0.12))
-                    .clipShape(Capsule())
+                if let provider = appState.providers.first(where: { $0.id == spec.id }) {
+                    SourcePill(source: provider.sourceKind)
+                } else {
+                    Text(spec.capability.title(language: appState.language))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(spec.capability.status.color)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(spec.capability.status.color.opacity(0.12))
+                        .clipShape(Capsule())
+                }
+            }
+
+            if let provider = appState.providers.first(where: { $0.id == spec.id }),
+               provider.sourceDescription.isEmpty == false {
+                Text(provider.sourceDescription)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             KeyValueRow(title: appState.localized("models"), value: spec.models.prefix(5).joined(separator: ", "))

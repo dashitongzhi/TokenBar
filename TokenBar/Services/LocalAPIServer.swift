@@ -1,34 +1,62 @@
 import Foundation
 import Network
+import OSLog
 
 @MainActor
 final class LocalAPIServer {
+    static let shared = LocalAPIServer(appState: .shared)
+
     private let appState: AppState
     private var listener: NWListener?
     private let queue = DispatchQueue(label: "TokenBar.LocalAPIServer")
+    private let logger = Logger(subsystem: "Kral.TokenBar", category: "LocalAPIServer")
 
     init(appState: AppState) {
         self.appState = appState
     }
 
+    func syncWithPreference(port: UInt16 = 3847) {
+        if appState.localAPIEnabled {
+            start(port: port)
+        } else {
+            stop(disabled: true)
+        }
+    }
+
     func start(port: UInt16 = 3847) {
+        guard appState.localAPIEnabled else {
+            stop(disabled: true)
+            return
+        }
         guard listener == nil else { return }
-        guard let endpointPort = NWEndpoint.Port(rawValue: port) else { return }
+        guard let endpointPort = NWEndpoint.Port(rawValue: port) else {
+            appState.setLocalAPIStatus(.failed("Invalid port \(port)"))
+            return
+        }
+        appState.setLocalAPIStatus(.starting(port: port))
         do {
             let listener = try NWListener(using: .tcp, on: endpointPort)
+            listener.stateUpdateHandler = { [weak self, weak listener] state in
+                guard let self, let listener else { return }
+                Task { @MainActor [self, listener] in
+                    self.handle(state: state, port: port, listener: listener)
+                }
+            }
             listener.newConnectionHandler = { [weak self] connection in
                 self?.handle(connection)
             }
             listener.start(queue: queue)
             self.listener = listener
         } catch {
+            appState.setLocalAPIStatus(.failed(error.localizedDescription))
             print("TokenBar Local API failed to start: \(error)")
         }
     }
 
-    func stop() {
+    func stop(disabled: Bool = false) {
         listener?.cancel()
         listener = nil
+        appState.setLocalAPIStatus(disabled ? .disabled : .stopped)
     }
 
     private nonisolated func handle(_ connection: NWConnection) {
@@ -48,6 +76,29 @@ final class LocalAPIServer {
                     }
                 })
             }
+        }
+    }
+
+    private func handle(state: NWListener.State, port: UInt16, listener eventListener: NWListener?) {
+        guard eventListener == nil || listener === eventListener else { return }
+
+        switch state {
+        case .ready:
+            guard appState.localAPIEnabled else {
+                stop(disabled: true)
+                return
+            }
+            appState.setLocalAPIStatus(.running(port: port))
+            logger.info("TokenBar Local API listening on 127.0.0.1:\(port, privacy: .public)")
+        case .failed(let error):
+            listener = nil
+            appState.setLocalAPIStatus(.failed(error.localizedDescription))
+            logger.error("TokenBar Local API listener failed: \(error.localizedDescription, privacy: .public)")
+        case .cancelled:
+            appState.setLocalAPIStatus(appState.localAPIEnabled ? .stopped : .disabled)
+            logger.info("TokenBar Local API listener stopped")
+        default:
+            break
         }
     }
 

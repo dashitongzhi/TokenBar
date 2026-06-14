@@ -10,6 +10,9 @@ struct TokenBarApp: App {
             MainDashboardView()
                 .environmentObject(appState)
                 .frame(minWidth: 880, minHeight: 620)
+                .task {
+                    LocalAPIServer.shared.syncWithPreference()
+                }
         }
         .windowStyle(.titleBar)
 

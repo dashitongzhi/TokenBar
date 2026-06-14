@@ -9,8 +9,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         statusBarController = StatusBarController(appState: .shared)
-        localAPIServer = LocalAPIServer(appState: .shared)
-        localAPIServer?.start()
+        localAPIServer = .shared
+        localAPIServer?.syncWithPreference()
         timer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { _ in
             Task { @MainActor in
                 AppState.shared.refreshAll()

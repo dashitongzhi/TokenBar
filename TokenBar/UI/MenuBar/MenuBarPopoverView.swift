@@ -223,22 +223,38 @@ struct ProviderCardView: View {
                         .foregroundStyle(provider.status.color)
                 }
                 Spacer()
-                StatusPill(status: provider.status)
+                SourcePill(source: provider.sourceKind)
+            }
+
+            if provider.sourceDescription.isEmpty == false {
+                Text(provider.sourceDescription)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(2)
             }
 
             HStack(alignment: .firstTextBaseline) {
-                Text("\(Int(provider.current))")
+                Text(primaryUsageText)
                     .font(.title3.weight(.semibold))
-                Text("/ \(Int(provider.limit)) \(provider.unit)")
+                Text(secondaryUsageText)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
-                Text("\(Int(provider.usageRatio * 100))%")
-                    .font(.callout.monospacedDigit().weight(.medium))
+                if provider.hasKnownQuotaLimit {
+                    Text("\(Int(provider.usageRatio * 100))%")
+                        .font(.callout.monospacedDigit().weight(.medium))
+                } else if provider.sourceKind == .live {
+                    Text(provider.displayCurrency)
+                        .font(.callout.monospacedDigit().weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
             }
 
-            ProgressView(value: min(provider.usageRatio, 1))
-                .tint(provider.status.color)
+            if provider.hasKnownQuotaLimit {
+                ProgressView(value: min(provider.usageRatio, 1))
+                    .tint(provider.status.color)
+            }
 
             MiniTrendLine(points: provider.history, color: provider.status.color)
                 .frame(height: 46)
@@ -246,14 +262,31 @@ struct ProviderCardView: View {
             HStack {
                 metric(appState.localized("today"), "$\(appState.formatMoney(provider.spendToday))")
                 Spacer()
-                metric(appState.localized("burnRate"), "\(Int(provider.burnRatePerHour))/h")
+                metric(appState.localized("requests"), "\(provider.requestCount)")
                 Spacer()
-                metric(appState.localized("reset"), appState.shortCountdown(to: provider.resetAt))
+                metric(appState.localized("burnRate"), "\(Int(provider.burnRatePerHour))/h")
             }
         }
         .padding(12)
         .background(Color(nsColor: .controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var primaryUsageText: String {
+        if provider.sourceKind == .live {
+            return "\(Int(provider.current))"
+        }
+        return "\(Int(provider.current))"
+    }
+
+    private var secondaryUsageText: String {
+        if provider.hasKnownQuotaLimit {
+            return "/ \(Int(provider.limit)) \(provider.unit)"
+        }
+        if provider.sourceKind == .live {
+            return "\(provider.unit) month-to-date"
+        }
+        return provider.unit
     }
 
     private func metric(_ title: String, _ value: String) -> some View {
@@ -287,6 +320,22 @@ struct StatusPill: View {
         case .warning: appState.localized("warning")
         case .critical: appState.localized("critical")
         }
+    }
+}
+
+struct SourcePill: View {
+    @EnvironmentObject private var appState: AppState
+    var source: UsageDataSource
+
+    var body: some View {
+        Label(source.title(language: appState.language), systemImage: source.symbolName)
+            .font(.caption.weight(.semibold))
+            .labelStyle(.titleAndIcon)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .foregroundStyle(source.color)
+            .background(source.color.opacity(0.12))
+            .clipShape(Capsule())
     }
 }
 

@@ -73,13 +73,27 @@ Run the app locally:
 ./script/build_and_run.sh
 ```
 
-Verify build and launch:
+Verify build, launch, and the local API:
 
 ```bash
 ./script/build_and_run.sh --verify
 ```
 
-The script builds `TokenBar.xcodeproj` with Xcode, launches the resulting macOS app, and is wired into Codex through `.codex/environments/environment.toml`.
+The verify mode builds `TokenBar.xcodeproj` with Xcode, stops any stale `TokenBar` process, temporarily enables the local API preference for the launch, then waits up to 20 seconds for an actually started process, not a launch-suspended stub, that owns a listening socket on `127.0.0.1:3847` and returns the expected `{"status":"ok","service":"TokenBar"}` health payload. It restores the previous local API preference when the script exits; if the API was disabled before verification, it also stops the verification app process so the listener does not remain active. Set `TOKENBAR_VERIFY_TIMEOUT=<seconds>` to adjust the deadline.
+
+The script is wired into Codex through `.codex/environments/environment.toml`.
+
+## Release Packaging
+
+Create a local release DMG:
+
+```bash
+./script/package_release.sh
+```
+
+The release script archives the macOS app, stages a drag-to-Applications DMG, and reports whether the artifact is ad-hoc, Developer ID signed, or notarized. It does not pretend signing or notarization are complete when Apple credentials are missing.
+
+Run `./script/package_release.sh --help` for Developer ID and notarization inputs.
 
 ## Current Status
 
@@ -89,7 +103,8 @@ This is a releaseable early product shell:
 - Workspace policy cards
 - Menu bar decision popover
 - Local API for agent preflight checks
-- Demo provider/workspace data
+- OpenAI organization usage and cost adapter with Keychain-backed admin key storage
+- Provider source badges that distinguish live data, missing credentials, and unsupported providers
 - API monitor catalog retained as an integration surface
 
-The next production step is replacing demo spend estimates with real adapters for Claude Code statusline data, OpenAI usage/cost APIs, Anthropic Admin API, and OpenRouter credits.
+The next production step is adding another real adapter, such as Claude Code statusline data, Anthropic Admin API, or OpenRouter credits.

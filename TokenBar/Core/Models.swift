@@ -136,6 +136,79 @@ enum UsageStatus: String, Codable {
     }
 }
 
+enum LocalAPIStatus: Equatable {
+    case disabled
+    case starting(port: UInt16)
+    case running(port: UInt16)
+    case stopped
+    case failed(String)
+
+    var status: UsageStatus {
+        switch self {
+        case .running: .healthy
+        case .disabled, .starting, .stopped: .warning
+        case .failed: .critical
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .running: .green
+        case .starting: .orange
+        case .failed: .red
+        case .disabled, .stopped: .secondary
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .running: "network"
+        case .disabled: "network.slash"
+        case .starting: "hourglass"
+        case .stopped: "pause.circle.fill"
+        case .failed: "exclamationmark.triangle.fill"
+        }
+    }
+}
+
+enum UsageDataSource: String, Codable {
+    case live
+    case liveUnavailable
+    case unsupported
+    case error
+
+    var color: Color {
+        switch self {
+        case .live: .green
+        case .liveUnavailable: .orange
+        case .unsupported: .secondary
+        case .error: .red
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .live: "checkmark.seal.fill"
+        case .liveUnavailable: "key.slash.fill"
+        case .unsupported: "slash.circle"
+        case .error: "exclamationmark.triangle.fill"
+        }
+    }
+
+    func title(language: AppLanguage) -> String {
+        switch (self, language) {
+        case (.live, .english): "Live"
+        case (.liveUnavailable, .english): "Needs key"
+        case (.unsupported, .english): "Unsupported"
+        case (.error, .english): "Error"
+        case (.live, .chinese): "实时"
+        case (.liveUnavailable, .chinese): "需要密钥"
+        case (.unsupported, .chinese): "未支持"
+        case (.error, .chinese): "错误"
+        }
+    }
+}
+
 struct UsagePoint: Identifiable, Codable, Equatable {
     var id = UUID()
     var timestamp: Date
@@ -155,14 +228,27 @@ struct ProviderUsage: Identifiable, Codable, Equatable {
     var resetAt: Date
     var lastUpdated: Date
     var history: [UsagePoint]
+    var dataSource: UsageDataSource?
+    var sourceDetail: String?
+    var sourceUpdatedAt: Date?
+    var tokensToday: Double?
+    var requestCountToday: Int?
+    var requestCountMonth: Int?
+    var currencyCode: String?
+    var quotaLimitKnown: Bool?
 
     var usageRatio: Double {
-        guard limit > 0 else { return 0 }
+        guard hasKnownQuotaLimit else { return 0 }
         return min(max(current / limit, 0), 1.5)
     }
 
     var remaining: Double {
-        max(limit - current, 0)
+        knownRemaining ?? 0
+    }
+
+    var knownRemaining: Double? {
+        guard hasKnownQuotaLimit else { return nil }
+        return max(limit - current, 0)
     }
 
     var burnRatePerHour: Double {
@@ -175,8 +261,29 @@ struct ProviderUsage: Identifiable, Codable, Equatable {
 
     var predictedExhaustion: Date? {
         let rate = burnRatePerHour
-        guard rate > 0, remaining > 0 else { return nil }
+        guard let knownRemaining, rate > 0, knownRemaining > 0 else { return nil }
         return Date().addingTimeInterval((remaining / rate) * 3600)
+    }
+
+    var hasKnownQuotaLimit: Bool {
+        (quotaLimitKnown ?? true) && limit > 0
+    }
+
+    var requestCount: Int {
+        requestCountMonth ?? 0
+    }
+
+    var todayRequestCount: Int {
+        requestCountToday ?? 0
+    }
+
+    var todayTokenCount: Double {
+        tokensToday ?? 0
+    }
+
+    var displayCurrency: String {
+        let value = (currencyCode ?? "USD").trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? "USD" : value.uppercased()
     }
 
     var status: UsageStatus {
@@ -191,16 +298,54 @@ struct ProviderUsage: Identifiable, Codable, Equatable {
         return .healthy
     }
 
-    mutating func simulateRefresh() {
-        let increment = Double.random(in: 8...90)
-        current = min(current + increment, limit * 1.05)
-        spendToday += increment * 0.0008
-        spendMonth += increment * 0.0008
-        lastUpdated = Date()
-        history.append(UsagePoint(timestamp: lastUpdated, value: current))
-        if history.count > 100 {
-            history.removeFirst(history.count - 100)
+    var sourceKind: UsageDataSource {
+        dataSource ?? .unsupported
+    }
+
+    var sourceDescription: String {
+        sourceDetail ?? ""
+    }
+
+    var isLive: Bool {
+        sourceKind == .live
+    }
+
+    mutating func apply(snapshot: OpenAIUsageSnapshot) {
+        current = snapshot.tokenTotal
+        limit = 0
+        unit = "tokens"
+        tokensToday = snapshot.tokenToday
+        requestCountToday = snapshot.requestCountToday
+        requestCountMonth = snapshot.requestCountMonth
+        currencyCode = snapshot.currency.uppercased()
+        quotaLimitKnown = false
+        spendToday = snapshot.spendToday
+        spendMonth = snapshot.spendMonth
+        resetAt = snapshot.resetAt
+        lastUpdated = snapshot.fetchedAt
+        history = snapshot.history.isEmpty ? [UsagePoint(timestamp: snapshot.fetchedAt, value: snapshot.tokenTotal)] : snapshot.history
+        dataSource = .live
+        sourceUpdatedAt = snapshot.fetchedAt
+        sourceDetail = "OpenAI organization usage and cost APIs. \(snapshot.requestCountMonth) requests this month, \(snapshot.currency.uppercased()) costs. Organization quota limits stay in the OpenAI console."
+    }
+
+    mutating func markSource(_ source: UsageDataSource, detail: String, now: Date = .now, clearUsage: Bool = false) {
+        if clearUsage {
+            current = 0
+            limit = 0
+            spendToday = 0
+            spendMonth = 0
+            history = [UsagePoint(timestamp: now, value: 0)]
+            tokensToday = 0
+            requestCountToday = 0
+            requestCountMonth = 0
+            currencyCode = "USD"
+            quotaLimitKnown = false
         }
+        dataSource = source
+        sourceDetail = detail
+        sourceUpdatedAt = now
+        lastUpdated = now
     }
 }
 
