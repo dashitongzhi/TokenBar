@@ -93,7 +93,7 @@ Create a local release DMG:
 ./script/package_release.sh
 ```
 
-The release script archives the macOS app, stages a drag-to-Applications DMG, and reports whether the artifact is ad-hoc, Developer ID signed, or notarized. It does not pretend signing or notarization are complete when Apple credentials are missing.
+The release script archives the macOS app, stages a drag-to-Applications DMG, and reports whether the artifact is ad-hoc, Developer ID signed, or notarized. It does not pretend signing or notarization are complete when Apple credentials are missing. The default local path uses ad-hoc signing for internal validation; public distribution still needs a Developer ID Application certificate plus notarization credentials.
 
 Run `./script/package_release.sh --help` for Developer ID and notarization inputs.
 
