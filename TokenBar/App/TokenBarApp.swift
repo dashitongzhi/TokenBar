@@ -5,6 +5,15 @@ struct TokenBarApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var appState = AppState.shared
 
+    init() {
+        // Used by script/build_and_run.sh --verify to exercise LocalAPIServer without LaunchServices.
+        if CommandLine.arguments.contains("--tokenbar-verify-local-api") {
+            AppState.shared.localAPIEnabled = true
+            LocalAPIServer.shared.syncWithPreference()
+            RunLoop.main.run()
+        }
+    }
+
     var body: some Scene {
         WindowGroup {
             MainDashboardView()

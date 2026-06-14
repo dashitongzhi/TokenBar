@@ -73,13 +73,15 @@ Run the app locally:
 ./script/build_and_run.sh
 ```
 
-Verify build, launch, and the local API:
+Verify build and the local API:
 
 ```bash
 ./script/build_and_run.sh --verify
 ```
 
-The verify mode builds `TokenBar.xcodeproj` with Xcode, stops any stale `TokenBar` process, temporarily enables the local API preference for the launch, then waits up to 20 seconds for an actually started process, not a launch-suspended stub, that owns a listening socket on `127.0.0.1:3847` and returns the expected `{"status":"ok","service":"TokenBar"}` health payload. It restores the previous local API preference when the script exits; if the API was disabled before verification, it also stops the verification app process so the listener does not remain active. Set `TOKENBAR_VERIFY_TIMEOUT=<seconds>` to adjust the deadline.
+The verify mode builds `TokenBar.xcodeproj` with Xcode, stops any stale `TokenBar` process, temporarily enables the local API preference, then prepares an ad-hoc signed verifier copy of the freshly built TokenBar executable. That verifier runs TokenBar's built-in `--tokenbar-verify-local-api` path without depending on LaunchServices or a window session. The script waits up to 20 seconds for an actually started process, not a launch-suspended stub, that owns a listening socket on `127.0.0.1:3847` and returns the expected `{"status":"ok","service":"TokenBar"}` health payload. It restores the previous local API preference and stops the verifier process when the script exits. Set `TOKENBAR_VERIFY_TIMEOUT=<seconds>` to adjust the deadline.
+
+`--verify` is a local API acceptance check, not a visual UI smoke test. Use the default `./script/build_and_run.sh` path when you need to launch the signed macOS app through LaunchServices.
 
 The script is wired into Codex through `.codex/environments/environment.toml`.
 

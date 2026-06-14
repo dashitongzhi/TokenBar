@@ -17,6 +17,10 @@ LOCAL_API_PREF_CAPTURED="0"
 LOCAL_API_PREF_WAS_SET="0"
 LOCAL_API_PREF_VALUE=""
 LOCAL_API_PREF_REQUIRES_APP_STOP="0"
+VERIFY_APP_PID=""
+VERIFY_EXEC="$ROOT_DIR/.build/tokenbar-verify/$APP_NAME"
+VERIFY_STDOUT="$ROOT_DIR/.build/tokenbar-verify.stdout.log"
+VERIFY_STDERR="$ROOT_DIR/.build/tokenbar-verify.stderr.log"
 
 if [[ -d /Applications/Xcode.app ]]; then
   export DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
@@ -106,9 +110,29 @@ restore_local_api_preference() {
   fi
 }
 
+stop_verify_process() {
+  [[ -n "$VERIFY_APP_PID" ]] || return 0
+  if kill -0 "$VERIFY_APP_PID" >/dev/null 2>&1; then
+    kill "$VERIFY_APP_PID" >/dev/null 2>&1 || true
+    local deadline=$((SECONDS + 5))
+    while kill -0 "$VERIFY_APP_PID" >/dev/null 2>&1 && [[ $SECONDS -lt $deadline ]]; do
+      sleep 0.2
+    done
+    kill -9 "$VERIFY_APP_PID" >/dev/null 2>&1 || true
+  fi
+  wait "$VERIFY_APP_PID" >/dev/null 2>&1 || true
+}
+
+cleanup_verify() {
+  local status=$?
+  stop_verify_process
+  restore_local_api_preference
+  exit "$status"
+}
+
 enable_local_api_for_verify() {
   capture_local_api_preference
-  trap restore_local_api_preference EXIT
+  trap cleanup_verify EXIT INT TERM
   stage "Enabling local API preference for verification"
   defaults write "$BUNDLE_ID" "$LOCAL_API_PREF_KEY" -bool true
 }
@@ -172,6 +196,11 @@ verify_app() {
   lsof -nP -iTCP:"$APP_PORT" -sTCP:LISTEN >&2 || true
   printf "\nHealth probe:\n" >&2
   curl -i --max-time 2 "$HEALTH_URL" >&2 || true
+  if [[ -s "$VERIFY_STDOUT" || -s "$VERIFY_STDERR" ]]; then
+    printf "\nVerification process output:\n" >&2
+    sed -n '1,120p' "$VERIFY_STDOUT" >&2 2>/dev/null || true
+    sed -n '1,120p' "$VERIFY_STDERR" >&2 2>/dev/null || true
+  fi
   return 1
 }
 
@@ -193,6 +222,21 @@ open_app() {
   /usr/bin/open -n "$APP_BUNDLE"
 }
 
+open_verify_app() {
+  stage "Preparing local API verifier executable"
+  mkdir -p "$(dirname "$VERIFY_EXEC")"
+  rm -f "$VERIFY_EXEC"
+  cp "$APP_BUNDLE/Contents/MacOS/$APP_NAME" "$VERIFY_EXEC"
+  chmod +x "$VERIFY_EXEC"
+  codesign --force --sign - "$VERIFY_EXEC" >/dev/null 2>&1 || fail "failed to ad-hoc sign verifier executable"
+
+  stage "Launching $APP_NAME local API verification mode"
+  : > "$VERIFY_STDOUT"
+  : > "$VERIFY_STDERR"
+  "$VERIFY_EXEC" --tokenbar-verify-local-api >"$VERIFY_STDOUT" 2>"$VERIFY_STDERR" &
+  VERIFY_APP_PID="$!"
+}
+
 case "$MODE" in
   run)
     open_app
@@ -210,7 +254,7 @@ case "$MODE" in
     ;;
   --verify|verify)
     enable_local_api_for_verify
-    open_app
+    open_verify_app
     verify_app
     ;;
   *)
