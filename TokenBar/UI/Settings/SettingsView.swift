@@ -167,7 +167,7 @@ private struct PlatformSettingsView: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
 
-            OpenAIAdminKeyPanel()
+            LiveProviderCredentialPanels()
 
             List {
                 Section(appState.localized("platforms")) {
@@ -205,105 +205,5 @@ private struct PlatformSettingsView: View {
             }
         }
         .padding()
-    }
-}
-
-private struct OpenAIAdminKeyPanel: View {
-    @EnvironmentObject private var appState: AppState
-    @State private var adminKey = ""
-    @State private var message = ""
-    @State private var isSaving = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Label(appState.localized("openAILiveUsage"), systemImage: "brain.head.profile")
-                    .font(.headline)
-                Spacer()
-                if let openAI = appState.providers.first(where: { $0.id == "openai" }) {
-                    SourcePill(source: openAI.sourceKind)
-                }
-            }
-
-            HStack(spacing: 8) {
-                SecureField(appState.localized("openAIAdminKey"), text: $adminKey)
-                    .textFieldStyle(.roundedBorder)
-
-                Button {
-                    save()
-                } label: {
-                    Label(appState.localized("save"), systemImage: "key.fill")
-                }
-                .disabled(isSaving || adminKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-
-                Button {
-                    clear()
-                } label: {
-                    Label(appState.localized("clear"), systemImage: "trash")
-                }
-                .disabled(isSaving)
-
-                Button {
-                    appState.refreshAll()
-                } label: {
-                    Label(appState.localized("refresh"), systemImage: "arrow.clockwise")
-                }
-                .disabled(appState.isRefreshingUsage)
-            }
-
-            if message.isEmpty == false {
-                Text(message)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else if let openAI = appState.providers.first(where: { $0.id == "openai" }) {
-                Text(openAI.sourceDescription)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .padding(14)
-        .background(Color(nsColor: .controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-    }
-
-    private func save() {
-        let trimmed = adminKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.isEmpty == false else { return }
-        isSaving = true
-        Task {
-            do {
-                try await appState.storeOpenAIAdminKey(trimmed)
-                await MainActor.run {
-                    adminKey = ""
-                    message = appState.localized("openAIKeySaved")
-                    isSaving = false
-                }
-            } catch {
-                await MainActor.run {
-                    message = error.localizedDescription
-                    isSaving = false
-                }
-            }
-        }
-    }
-
-    private func clear() {
-        isSaving = true
-        Task {
-            do {
-                try await appState.clearOpenAIAdminKey()
-                await MainActor.run {
-                    message = appState.localized("openAIKeyCleared")
-                    isSaving = false
-                }
-            } catch {
-                await MainActor.run {
-                    message = error.localizedDescription
-                    isSaving = false
-                }
-            }
-        }
     }
 }

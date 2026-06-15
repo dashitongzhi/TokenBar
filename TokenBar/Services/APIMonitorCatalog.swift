@@ -35,20 +35,20 @@ enum APIMonitorCatalog {
             capability: .automatic,
             usageRequest: APIRequestTemplate(
                 method: "GET",
-                url: "https://api.anthropic.com/v1/organizations/usage_report/messages?starting_at={iso_start}&ending_at={iso_end}&bucket_width=1d",
+                url: "https://api.anthropic.com/v1/organizations/usage_report/messages?starting_at={iso_start}&ending_at={iso_end}&bucket_width=1d&limit=31",
                 headers: ["x-api-key: {ANTHROPIC_ADMIN_KEY}", "anthropic-version: 2023-06-01"],
                 body: nil
             ),
             costRequest: APIRequestTemplate(
                 method: "GET",
-                url: "https://api.anthropic.com/v1/organizations/cost_report?starting_at={iso_start}&ending_at={iso_end}&group_by[]=workspace_id&group_by[]=description",
+                url: "https://api.anthropic.com/v1/organizations/cost_report?starting_at={iso_start}&ending_at={iso_end}&bucket_width=1d&limit=31",
                 headers: ["x-api-key: {ANTHROPIC_ADMIN_KEY}", "anthropic-version: 2023-06-01"],
                 body: nil
             ),
             subscriptionURL: "https://console.anthropic.com/settings/limits",
-            docsURL: "https://docs.anthropic.com/en/api/data-usage-cost-api",
+            docsURL: "https://platform.claude.com/docs/en/manage-claude/usage-cost-api",
             alertMetric: "Message token usage, daily cost, workspace cost, code execution cost",
-            note: "Requires an Anthropic Admin API key. Individual Claude plans do not expose a public subscription quota API."
+            note: "Requires an Anthropic Admin API key that starts with sk-ant-admin. TokenBar normalizes USD minor-unit cost amounts. Individual Claude plans and Claude subscription quotas do not expose this organization API."
         ),
         APIMonitorSpec(
             id: "gemini",

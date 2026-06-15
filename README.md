@@ -12,6 +12,7 @@ It helps developers stop expensive or unsafe agent runs before they happen: wron
 - Checks provider allowlists, blocked models, per-run caps, daily budgets, and company-key requirements
 - Exposes a local-only HTTP API on `localhost:3847`
 - Keeps API-key handling local and Keychain-oriented
+- Reads live OpenAI and Anthropic organization usage when admin keys are available
 
 TokenBar is not trying to be another API key switcher. Tools like cc-switch are good at switching providers. TokenBar focuses on deciding whether the current agent run should proceed.
 
@@ -65,6 +66,22 @@ Example response:
 }
 ```
 
+## Live Provider Usage
+
+TokenBar supports live organization usage for:
+
+- OpenAI organization usage and cost APIs with `OPENAI_ADMIN_KEY` or `TOKENBAR_OPENAI_ADMIN_KEY`
+- Anthropic Usage and Cost Admin API with `ANTHROPIC_ADMIN_KEY` or `TOKENBAR_ANTHROPIC_ADMIN_KEY`
+
+Keys can be saved from Settings into the macOS Keychain, or supplied through the app environment. Anthropic live usage requires an Admin API key that starts with `sk-ant-admin`; standard Claude API keys are still useful for inference, but they do not authorize the organization usage and cost report endpoints. Anthropic currently supplies live token and cost buckets here; TokenBar marks message request counts and Claude Console subscription quotas as unknown instead of estimating them.
+
+Provider source badges are deliberately literal:
+
+- `Live`: TokenBar fetched provider data successfully.
+- `Needs key`: the provider has a live adapter, but no usable admin key is available.
+- `Error`: the live adapter ran and the provider returned an error or unreadable response.
+- `Unsupported`: TokenBar has metadata for the provider, but no live adapter yet.
+
 ## Development
 
 Run the app locally:
@@ -106,7 +123,8 @@ This is a releaseable early product shell:
 - Menu bar decision popover
 - Local API for agent preflight checks
 - OpenAI organization usage and cost adapter with Keychain-backed admin key storage
-- Provider source badges that distinguish live data, missing credentials, and unsupported providers
+- Anthropic Usage and Cost Admin API adapter with matching Keychain-backed admin key storage
+- Provider source badges that distinguish live data, missing credentials, adapter errors, and unsupported providers
 - API monitor catalog retained as an integration surface
 
-The next production step is adding another real adapter, such as Claude Code statusline data, Anthropic Admin API, or OpenRouter credits.
+The next production step is adding more real adapters, such as Claude Code statusline data, OpenRouter credits, or provider-specific rate-limit headers.

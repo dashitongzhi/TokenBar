@@ -21,7 +21,7 @@ struct DiscoveryTarget: Identifiable, Hashable, Sendable {
 actor WorkspaceDiscovery {
     private let patterns: [String: [String]] = [
         "OpenAI": ["OPENAI_API_KEY", "OPENAI_KEY", "OPENAI_ADMIN_KEY", "TOKENBAR_OPENAI_ADMIN_KEY"],
-        "Anthropic": ["ANTHROPIC_API_KEY", "CLAUDE_API_KEY"],
+        "Anthropic": ["ANTHROPIC_API_KEY", "CLAUDE_API_KEY", "ANTHROPIC_ADMIN_KEY", "TOKENBAR_ANTHROPIC_ADMIN_KEY"],
         "Gemini": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
         "GitHub": ["GITHUB_TOKEN", "GH_TOKEN"],
         "Stripe": ["STRIPE_SECRET_KEY", "STRIPE_API_KEY"],

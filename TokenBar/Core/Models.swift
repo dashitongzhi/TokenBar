@@ -1,6 +1,4 @@
 import Foundation
-import AppKit
-import SwiftUI
 
 enum AppLanguage: String, CaseIterable, Identifiable, Codable {
     case english = "en"
@@ -110,30 +108,6 @@ enum UsageStatus: String, Codable {
     case healthy
     case warning
     case critical
-
-    var color: Color {
-        switch self {
-        case .healthy: .green
-        case .warning: .orange
-        case .critical: .red
-        }
-    }
-
-    var nsColor: NSColor {
-        switch self {
-        case .healthy: .systemGreen
-        case .warning: .systemOrange
-        case .critical: .systemRed
-        }
-    }
-
-    var symbolName: String {
-        switch self {
-        case .healthy: "chart.bar.fill"
-        case .warning: "exclamationmark.circle.fill"
-        case .critical: "exclamationmark.triangle.fill"
-        }
-    }
 }
 
 enum LocalAPIStatus: Equatable {
@@ -142,33 +116,6 @@ enum LocalAPIStatus: Equatable {
     case running(port: UInt16)
     case stopped
     case failed(String)
-
-    var status: UsageStatus {
-        switch self {
-        case .running: .healthy
-        case .disabled, .starting, .stopped: .warning
-        case .failed: .critical
-        }
-    }
-
-    var color: Color {
-        switch self {
-        case .running: .green
-        case .starting: .orange
-        case .failed: .red
-        case .disabled, .stopped: .secondary
-        }
-    }
-
-    var symbolName: String {
-        switch self {
-        case .running: "network"
-        case .disabled: "network.slash"
-        case .starting: "hourglass"
-        case .stopped: "pause.circle.fill"
-        case .failed: "exclamationmark.triangle.fill"
-        }
-    }
 }
 
 enum UsageDataSource: String, Codable {
@@ -176,37 +123,6 @@ enum UsageDataSource: String, Codable {
     case liveUnavailable
     case unsupported
     case error
-
-    var color: Color {
-        switch self {
-        case .live: .green
-        case .liveUnavailable: .orange
-        case .unsupported: .secondary
-        case .error: .red
-        }
-    }
-
-    var symbolName: String {
-        switch self {
-        case .live: "checkmark.seal.fill"
-        case .liveUnavailable: "key.slash.fill"
-        case .unsupported: "slash.circle"
-        case .error: "exclamationmark.triangle.fill"
-        }
-    }
-
-    func title(language: AppLanguage) -> String {
-        switch (self, language) {
-        case (.live, .english): "Live"
-        case (.liveUnavailable, .english): "Needs key"
-        case (.unsupported, .english): "Unsupported"
-        case (.error, .english): "Error"
-        case (.live, .chinese): "实时"
-        case (.liveUnavailable, .chinese): "需要密钥"
-        case (.unsupported, .chinese): "未支持"
-        case (.error, .chinese): "错误"
-        }
-    }
 }
 
 struct UsagePoint: Identifiable, Codable, Equatable {
@@ -236,6 +152,7 @@ struct ProviderUsage: Identifiable, Codable, Equatable {
     var requestCountMonth: Int?
     var currencyCode: String?
     var quotaLimitKnown: Bool?
+    var requestCountKnown: Bool?
 
     var usageRatio: Double {
         guard hasKnownQuotaLimit else { return 0 }
@@ -275,6 +192,18 @@ struct ProviderUsage: Identifiable, Codable, Equatable {
 
     var todayRequestCount: Int {
         requestCountToday ?? 0
+    }
+
+    var hasKnownRequestCount: Bool {
+        requestCountKnown ?? (requestCountMonth != nil || requestCountToday != nil)
+    }
+
+    var knownRequestCount: Int? {
+        hasKnownRequestCount ? requestCount : nil
+    }
+
+    var knownTodayRequestCount: Int? {
+        hasKnownRequestCount ? todayRequestCount : nil
     }
 
     var todayTokenCount: Double {
@@ -319,6 +248,7 @@ struct ProviderUsage: Identifiable, Codable, Equatable {
         requestCountMonth = snapshot.requestCountMonth
         currencyCode = snapshot.currency.uppercased()
         quotaLimitKnown = false
+        requestCountKnown = true
         spendToday = snapshot.spendToday
         spendMonth = snapshot.spendMonth
         resetAt = snapshot.resetAt
@@ -327,6 +257,26 @@ struct ProviderUsage: Identifiable, Codable, Equatable {
         dataSource = .live
         sourceUpdatedAt = snapshot.fetchedAt
         sourceDetail = "OpenAI organization usage and cost APIs. \(snapshot.requestCountMonth) requests this month, \(snapshot.currency.uppercased()) costs. Organization quota limits stay in the OpenAI console."
+    }
+
+    mutating func apply(snapshot: AnthropicUsageSnapshot) {
+        current = snapshot.tokenTotal
+        limit = 0
+        unit = "tokens"
+        tokensToday = snapshot.tokenToday
+        requestCountToday = snapshot.requestCountToday
+        requestCountMonth = snapshot.requestCountMonth
+        currencyCode = snapshot.currency.uppercased()
+        quotaLimitKnown = false
+        requestCountKnown = false
+        spendToday = snapshot.spendToday
+        spendMonth = snapshot.spendMonth
+        resetAt = snapshot.resetAt
+        lastUpdated = snapshot.fetchedAt
+        history = snapshot.history.isEmpty ? [UsagePoint(timestamp: snapshot.fetchedAt, value: snapshot.tokenTotal)] : snapshot.history
+        dataSource = .live
+        sourceUpdatedAt = snapshot.fetchedAt
+        sourceDetail = "Anthropic Usage and Cost Admin API. Token and cost data are live; message request counts and console spend limits stay outside this public Admin API."
     }
 
     mutating func markSource(_ source: UsageDataSource, detail: String, now: Date = .now, clearUsage: Bool = false) {
@@ -341,6 +291,7 @@ struct ProviderUsage: Identifiable, Codable, Equatable {
             requestCountMonth = 0
             currencyCode = "USD"
             quotaLimitKnown = false
+            requestCountKnown = false
         }
         dataSource = source
         sourceDetail = detail
