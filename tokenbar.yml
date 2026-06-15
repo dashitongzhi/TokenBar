@@ -1,0 +1,35 @@
+version: 1
+
+workspace:
+  id: tokenbar
+  name: TokenBar
+  path: /Users/kral/project/TokenBar
+  client: local
+
+budgets:
+  daily: 6.00
+  monthly: 180.00
+  max_run: 1.50
+  spend_today: 0.00
+  spend_month: 0.00
+
+providers:
+  allowed:
+    - anthropic
+    - openai
+    - openrouter
+  preferred: anthropic
+  require_company_key: true
+
+models:
+  blocked:
+    - opus
+    - gpt-5-pro
+
+rules:
+  - name: Block expensive refactors on TokenBar
+    when:
+      intent: refactor
+      estimated_cost_gt: 1.50
+    decision: block
+    reason: Split the refactor or use a cheaper model first.

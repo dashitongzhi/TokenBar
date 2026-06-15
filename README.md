@@ -23,6 +23,68 @@ TokenBar is not trying to be another API key switcher. Tools like cc-switch are 
 3. The menu bar and dashboard show `ALLOW`, `WARN`, or `BLOCK`.
 4. External tools can call the local API before they launch a costly task.
 
+## CLI Preflight
+
+TokenBar includes a dependency-free local CLI at `bin/tokenbar`.
+
+```bash
+./bin/tokenbar status
+
+./bin/tokenbar check \
+  --agent claudeCode \
+  --provider anthropic \
+  --model claude-opus \
+  --estimated-cost 2.40 \
+  --estimated-tokens 180000 \
+  --intent refactor
+```
+
+`tokenbar check` returns the product-plan exit codes:
+
+- `0`: allow
+- `1`: warn
+- `2`: block
+- `3`: CLI/config/API error
+
+The CLI first calls the running app's `POST /policy/evaluate` endpoint on `http://127.0.0.1:3847`. If the app is not running, it searches upward from the current directory for `tokenbar.yml` or `tokenbar.yaml` and evaluates the same workspace policy locally. If the app responds for a different workspace than the discovered config, the CLI also uses the local config instead of silently accepting the wrong workspace decision. That offline path is intentionally narrow: provider allowlists, blocked model substrings, per-run cost caps, daily budget projection, and company-key requirements mirror the current `PolicyEngine`.
+
+`tokenbar status` reports whether the local app API is reachable and which project config file will be used for offline checks.
+
+### `tokenbar.yml`
+
+Project-level policy files use the shape from `docs/PROJECT_PLAN.md`:
+
+```yaml
+version: 1
+
+workspace:
+  id: client-app
+  name: Client App
+  path: ~/project/client-app
+  client: acme
+
+budgets:
+  daily: 8.00
+  monthly: 160.00
+  max_run: 1.50
+  spend_today: 4.70
+
+providers:
+  allowed:
+    - anthropic
+    - openai
+    - openrouter
+  preferred: anthropic
+  require_company_key: true
+
+models:
+  blocked:
+    - opus
+    - gpt-5-pro
+```
+
+The repo includes its own `tokenbar.yml`, so you can dogfood the offline flow immediately.
+
 ## Local API
 
 ```bash
@@ -66,6 +128,25 @@ Example response:
 }
 ```
 
+## Agent Hook Examples
+
+Working hook examples live in `examples/hooks/`.
+
+For Codex, copy or adapt `examples/hooks/codex-hooks.json` into `.codex/hooks.json`. Codex discovers project hooks from `.codex/hooks.json` or inline `.codex/config.toml` hook tables, and `UserPromptSubmit` hooks receive the prompt and model on stdin. See the [Codex hooks docs](https://developers.openai.com/codex/hooks).
+
+For Claude Code, merge `examples/hooks/claude-settings.example.json` into `.claude/settings.json` or `.claude/settings.local.json`. Claude Code `UserPromptSubmit` hooks can return a top-level `decision: "block"` with a `reason`, which the TokenBar example emits when `tokenbar check` returns `2`. See the [Claude Code hooks docs](https://docs.anthropic.com/en/docs/claude-code/hooks).
+
+Both shell hooks accept these environment overrides:
+
+```bash
+TOKENBAR_BIN=/absolute/path/to/tokenbar
+TOKENBAR_PROVIDER=anthropic
+TOKENBAR_MODEL=claude-sonnet
+TOKENBAR_ESTIMATED_COST=0.25
+TOKENBAR_ESTIMATED_TOKENS=20000
+TOKENBAR_INTENT=refactor
+```
+
 ## Live Provider Usage
 
 TokenBar supports live organization usage for:
@@ -102,6 +183,14 @@ The verify mode builds `TokenBar.xcodeproj` with Xcode, stops any stale `TokenBa
 
 The script is wired into Codex through `.codex/environments/environment.toml`.
 
+Run the CLI smoke checks:
+
+```bash
+./bin/tokenbar status
+./bin/tokenbar check --agent codex --provider anthropic --model claude-sonnet --estimated-cost 0.20 --estimated-tokens 12000 --intent debug
+./bin/tokenbar check --agent claudeCode --provider anthropic --model claude-opus --estimated-cost 2.40 --estimated-tokens 180000 --intent refactor
+```
+
 ## Release Packaging
 
 Create a local release DMG:
@@ -122,6 +211,8 @@ This is a releaseable early product shell:
 - Workspace policy cards
 - Menu bar decision popover
 - Local API for agent preflight checks
+- CLI preflight with `tokenbar status`, `tokenbar check`, upward `tokenbar.yml` lookup, and offline policy fallback
+- Working Codex and Claude Code `UserPromptSubmit` hook examples
 - OpenAI organization usage and cost adapter with Keychain-backed admin key storage
 - Anthropic Usage and Cost Admin API adapter with matching Keychain-backed admin key storage
 - Provider source badges that distinguish live data, missing credentials, adapter errors, and unsupported providers
