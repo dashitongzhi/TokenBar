@@ -57,7 +57,7 @@ struct ProviderCardView: View {
                 .frame(height: 46)
 
             HStack {
-                metric(appState.localized("today"), "$\(appState.formatMoney(provider.spendToday))")
+                metric(appState.localized("today"), todaySpendText)
                 Spacer()
                 metric(appState.localized("requests"), requestMetricText)
                 Spacer()
@@ -70,11 +70,17 @@ struct ProviderCardView: View {
     }
 
     private var primaryUsageText: String {
-        "\(Int(provider.current))"
+        if provider.unit == "credits" {
+            return appState.formatMoney(provider.current)
+        }
+        return "\(Int(provider.current))"
     }
 
     private var secondaryUsageText: String {
         if provider.hasKnownQuotaLimit {
+            if provider.unit == "credits" {
+                return "/ \(appState.formatMoney(provider.limit)) \(provider.unit)"
+            }
             return "/ \(Int(provider.limit)) \(provider.unit)"
         }
         if provider.sourceKind == .live {
@@ -85,6 +91,10 @@ struct ProviderCardView: View {
 
     private var requestMetricText: String {
         provider.knownRequestCount.map(String.init) ?? "-"
+    }
+
+    private var todaySpendText: String {
+        provider.hasKnownSpendToday ? "$\(appState.formatMoney(provider.spendToday))" : "-"
     }
 
     private func metric(_ title: String, _ value: String) -> some View {

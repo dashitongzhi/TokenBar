@@ -25,7 +25,7 @@ actor WorkspaceDiscovery {
         "Gemini": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
         "GitHub": ["GITHUB_TOKEN", "GH_TOKEN"],
         "Stripe": ["STRIPE_SECRET_KEY", "STRIPE_API_KEY"],
-        "OpenRouter": ["OPENROUTER_API_KEY"],
+        "OpenRouter": ["OPENROUTER_API_KEY", "TOKENBAR_OPENROUTER_API_KEY", "OPENROUTER_MANAGEMENT_KEY", "TOKENBAR_OPENROUTER_MANAGEMENT_KEY"],
         "DeepSeek": ["DEEPSEEK_API_KEY"],
         "Mistral": ["MISTRAL_API_KEY"],
         "Cloudflare": ["CLOUDFLARE_API_TOKEN", "CF_API_TOKEN"],

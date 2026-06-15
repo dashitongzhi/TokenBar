@@ -31,6 +31,20 @@ enum AppSeedData {
                 dataSource: .liveUnavailable,
                 sourceDetail: "Anthropic live usage requires ANTHROPIC_ADMIN_KEY in Keychain or the app environment. Use an Admin API key that starts with sk-ant-admin."
             ),
+            provider(
+                id: "openrouter",
+                name: "OpenRouter",
+                category: "AI & API",
+                symbol: "point.3.connected.trianglepath.dotted",
+                current: 0,
+                limit: 0,
+                unit: "credits",
+                spendToday: 0,
+                spendMonth: 0,
+                resetHours: 24 * 30,
+                dataSource: .liveUnavailable,
+                sourceDetail: "OpenRouter live credits require OPENROUTER_API_KEY in Keychain or the app environment."
+            ),
             provider(id: "cursor", name: "Cursor", category: "AI Tool", symbol: "cursorarrow.motionlines", current: 0, limit: 100, unit: "requests", spendToday: 0, spendMonth: 0, resetHours: 24 * 30),
             provider(id: "github", name: "GitHub Copilot", category: "Developer Tool", symbol: "chevron.left.forwardslash.chevron.right", current: 0, limit: 100, unit: "requests", spendToday: 0, spendMonth: 0, resetHours: 24 * 30),
             provider(id: "stripe", name: "Stripe", category: "Payments", symbol: "creditcard.fill", current: 0, limit: 5_000, unit: "events", spendToday: 0, spendMonth: 0, resetHours: 24 * 30)
@@ -125,7 +139,9 @@ enum AppSeedData {
             dataSource: dataSource,
             sourceDetail: sourceDetail ?? "TokenBar does not have a live adapter for this provider yet.",
             sourceUpdatedAt: now,
-            requestCountKnown: false
+            requestCountKnown: false,
+            spendTodayKnown: dataSource == .live,
+            spendMonthKnown: dataSource == .live
         )
     }
 }

@@ -53,8 +53,10 @@ enum LocalAPIPayloadBuilder {
                 "requestsKnown": provider.hasKnownRequestCount,
                 "requestsToday": provider.knownTodayRequestCount ?? NSNull(),
                 "requestsMonth": provider.knownRequestCount ?? NSNull(),
-                "spendToday": provider.spendToday,
-                "spendMonth": provider.spendMonth,
+                "spendTodayKnown": provider.hasKnownSpendToday,
+                "spendToday": provider.hasKnownSpendToday ? provider.spendToday as Any : NSNull() as Any,
+                "spendMonthKnown": provider.hasKnownSpendMonth,
+                "spendMonth": provider.hasKnownSpendMonth ? provider.spendMonth as Any : NSNull() as Any,
                 "currency": provider.displayCurrency
             ]
             metric["predictedExhaustion"] = provider.predictedExhaustion.map { ISO8601DateFormatter().string(from: $0) } ?? NSNull()
@@ -91,8 +93,10 @@ enum LocalAPIPayloadBuilder {
             "requestsKnown": provider.hasKnownRequestCount,
             "requestsToday": provider.knownTodayRequestCount ?? NSNull(),
             "requestsMonth": provider.knownRequestCount ?? NSNull(),
-            "spendToday": provider.spendToday,
-            "spendMonth": provider.spendMonth,
+            "spendTodayKnown": provider.hasKnownSpendToday,
+            "spendToday": provider.hasKnownSpendToday ? provider.spendToday as Any : NSNull() as Any,
+            "spendMonthKnown": provider.hasKnownSpendMonth,
+            "spendMonth": provider.hasKnownSpendMonth ? provider.spendMonth as Any : NSNull() as Any,
             "currency": provider.displayCurrency,
             "predictedExhaustion": provider.predictedExhaustion.map { ISO8601DateFormatter().string(from: $0) } ?? NSNull(),
             "recommendation": recommendation

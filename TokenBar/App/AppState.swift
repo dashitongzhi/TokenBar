@@ -123,6 +123,7 @@ final class AppState: ObservableObject {
     private let providerStore = ProviderUsageStore()
     private let openAIUsageService = OpenAIUsageService()
     private let anthropicUsageService = AnthropicUsageService()
+    private let openRouterCreditsService = OpenRouterCreditsService()
 
     private init() {
         let savedPreferences = preferencesStore.load()
@@ -174,11 +175,11 @@ final class AppState: ObservableObject {
     }
 
     var totalSpendMonth: Double {
-        providers.reduce(0) { $0 + $1.spendMonth }
+        providers.reduce(0) { $0 + ($1.hasKnownSpendMonth ? $1.spendMonth : 0) }
     }
 
     var totalSpendToday: Double {
-        providers.reduce(0) { $0 + $1.spendToday }
+        providers.reduce(0) { $0 + ($1.hasKnownSpendToday ? $1.spendToday : 0) }
     }
 
     var liveProviderCount: Int {
@@ -300,7 +301,12 @@ final class AppState: ObservableObject {
         Task {
             async let openAIResult = openAIUsageService.refresh()
             async let anthropicResult = anthropicUsageService.refresh()
-            apply(openAIResult: await openAIResult, anthropicResult: await anthropicResult)
+            async let openRouterResult = openRouterCreditsService.refresh()
+            apply(
+                openAIResult: await openAIResult,
+                anthropicResult: await anthropicResult,
+                openRouterResult: await openRouterResult
+            )
         }
     }
 
@@ -337,6 +343,26 @@ final class AppState: ObservableObject {
             providers[index].markSource(
                 .liveUnavailable,
                 detail: "Anthropic live usage requires ANTHROPIC_ADMIN_KEY in Keychain or the app environment. Use an Admin API key that starts with sk-ant-admin.",
+                clearUsage: true
+            )
+        }
+        persistProviders()
+        notifyStatusBarUpdate()
+    }
+
+    func storeOpenRouterAPIKey(_ key: String) async throws {
+        try await KeychainService.shared.store(value: key, for: "OPENROUTER_API_KEY")
+        addAudit(provider: "OpenRouter", action: "key.store", detail: "Stored OpenRouter API key in Keychain")
+        refreshAll()
+    }
+
+    func clearOpenRouterAPIKey() async throws {
+        try await KeychainService.shared.delete(key: "OPENROUTER_API_KEY")
+        addAudit(provider: "OpenRouter", action: "key.delete", detail: "Removed OpenRouter API key from Keychain")
+        if let index = providers.firstIndex(where: { $0.id == "openrouter" }) {
+            providers[index].markSource(
+                .liveUnavailable,
+                detail: "OpenRouter live credits require OPENROUTER_API_KEY in Keychain or the app environment.",
                 clearUsage: true
             )
         }
@@ -567,7 +593,11 @@ final class AppState: ObservableObject {
         currentDecision = evaluatePolicy(input: currentPolicyInput, shouldRecord: false)
     }
 
-    private func apply(openAIResult: OpenAIUsageRefreshResult, anthropicResult: AnthropicUsageRefreshResult) {
+    private func apply(
+        openAIResult: OpenAIUsageRefreshResult,
+        anthropicResult: AnthropicUsageRefreshResult,
+        openRouterResult: OpenRouterCreditsRefreshResult
+    ) {
         defer {
             lastRefresh = .now
             isRefreshingUsage = false
@@ -579,6 +609,7 @@ final class AppState: ObservableObject {
 
         applyOpenAIResult(openAIResult)
         applyAnthropicResult(anthropicResult)
+        applyOpenRouterResult(openRouterResult)
     }
 
     private func applyOpenAIResult(_ result: OpenAIUsageRefreshResult) {
@@ -612,6 +643,23 @@ final class AppState: ObservableObject {
         case .failure(let detail):
             providers[index].markSource(.error, detail: detail)
             addAudit(provider: "Anthropic", action: "usage.error", detail: detail)
+        }
+    }
+
+    private func applyOpenRouterResult(_ result: OpenRouterCreditsRefreshResult) {
+        ensureOpenRouterProviderExists()
+        guard let index = providers.firstIndex(where: { $0.id == "openrouter" }) else { return }
+
+        switch result {
+        case .success(let snapshot):
+            providers[index].apply(snapshot: snapshot)
+            addAudit(provider: "OpenRouter", action: "credits.live", detail: "Fetched \(formatMoney(snapshot.totalUsage)) used of \(formatMoney(snapshot.totalCredits)) credits")
+        case .unavailable(let detail):
+            providers[index].markSource(.liveUnavailable, detail: detail, clearUsage: true)
+            addAudit(provider: "OpenRouter", action: "credits.needs_key", detail: "Live credits refresh skipped because no OpenRouter API key is available")
+        case .failure(let detail):
+            providers[index].markSource(.error, detail: detail)
+            addAudit(provider: "OpenRouter", action: "credits.error", detail: detail)
         }
     }
 
@@ -649,6 +697,24 @@ final class AppState: ObservableObject {
             dataSource: .liveUnavailable,
             sourceDetail: "Anthropic live usage requires ANTHROPIC_ADMIN_KEY in Keychain or the app environment. Use an Admin API key that starts with sk-ant-admin."
         ), at: min(providers.count, 1))
+    }
+
+    private func ensureOpenRouterProviderExists() {
+        guard providers.contains(where: { $0.id == "openrouter" }) == false else { return }
+        providers.insert(AppSeedData.provider(
+            id: "openrouter",
+            name: "OpenRouter",
+            category: "AI & API",
+            symbol: "point.3.connected.trianglepath.dotted",
+            current: 0,
+            limit: 0,
+            unit: "credits",
+            spendToday: 0,
+            spendMonth: 0,
+            resetHours: 24 * 30,
+            dataSource: .liveUnavailable,
+            sourceDetail: "OpenRouter live credits require OPENROUTER_API_KEY in Keychain or the app environment."
+        ), at: min(providers.count, 2))
     }
 
     private func usageSummary(id: String, title: String, multiplier: Double, requestDivisor: Double) -> UsageSummary {

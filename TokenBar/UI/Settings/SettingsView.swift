@@ -185,7 +185,7 @@ private struct PlatformSettingsView: View {
                             Spacer()
                             VStack(alignment: .trailing, spacing: 4) {
                                 SourcePill(source: provider.sourceKind)
-                                Text("$\(appState.formatMoney(provider.spendMonth))")
+                                Text(provider.hasKnownSpendMonth ? "$\(appState.formatMoney(provider.spendMonth))" : "-")
                                     .font(.caption.monospacedDigit())
                                     .foregroundStyle(.secondary)
                             }

@@ -26,6 +26,17 @@ struct LiveProviderCredentialPanels: View {
                 saveAction: appState.storeAnthropicAdminKey,
                 clearAction: appState.clearAnthropicAdminKey
             )
+
+            LiveProviderKeyPanel(
+                providerID: "openrouter",
+                titleKey: "openRouterLiveUsage",
+                fieldKey: "openRouterAPIKey",
+                symbolName: "point.3.connected.trianglepath.dotted",
+                savedKey: "openRouterKeySaved",
+                clearedKey: "openRouterKeyCleared",
+                saveAction: appState.storeOpenRouterAPIKey,
+                clearAction: appState.clearOpenRouterAPIKey
+            )
         }
     }
 }

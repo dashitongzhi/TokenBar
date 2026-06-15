@@ -153,6 +153,8 @@ struct ProviderUsage: Identifiable, Codable, Equatable {
     var currencyCode: String?
     var quotaLimitKnown: Bool?
     var requestCountKnown: Bool?
+    var spendTodayKnown: Bool? = nil
+    var spendMonthKnown: Bool? = nil
 
     var usageRatio: Double {
         guard hasKnownQuotaLimit else { return 0 }
@@ -215,6 +217,14 @@ struct ProviderUsage: Identifiable, Codable, Equatable {
         return value.isEmpty ? "USD" : value.uppercased()
     }
 
+    var hasKnownSpendToday: Bool {
+        spendTodayKnown ?? true
+    }
+
+    var hasKnownSpendMonth: Bool {
+        spendMonthKnown ?? true
+    }
+
     var status: UsageStatus {
         if let predictedExhaustion {
             let hours = predictedExhaustion.timeIntervalSinceNow / 3600
@@ -249,6 +259,8 @@ struct ProviderUsage: Identifiable, Codable, Equatable {
         currencyCode = snapshot.currency.uppercased()
         quotaLimitKnown = false
         requestCountKnown = true
+        spendTodayKnown = true
+        spendMonthKnown = true
         spendToday = snapshot.spendToday
         spendMonth = snapshot.spendMonth
         resetAt = snapshot.resetAt
@@ -269,6 +281,8 @@ struct ProviderUsage: Identifiable, Codable, Equatable {
         currencyCode = snapshot.currency.uppercased()
         quotaLimitKnown = false
         requestCountKnown = false
+        spendTodayKnown = true
+        spendMonthKnown = true
         spendToday = snapshot.spendToday
         spendMonth = snapshot.spendMonth
         resetAt = snapshot.resetAt
@@ -277,6 +291,28 @@ struct ProviderUsage: Identifiable, Codable, Equatable {
         dataSource = .live
         sourceUpdatedAt = snapshot.fetchedAt
         sourceDetail = "Anthropic Usage and Cost Admin API. Token and cost data are live; message request counts and console spend limits stay outside this public Admin API."
+    }
+
+    mutating func apply(snapshot: OpenRouterCreditsSnapshot) {
+        current = snapshot.totalUsage
+        limit = snapshot.totalCredits
+        unit = "credits"
+        tokensToday = 0
+        requestCountToday = 0
+        requestCountMonth = 0
+        currencyCode = "USD"
+        quotaLimitKnown = snapshot.totalCredits > 0
+        requestCountKnown = false
+        spendTodayKnown = false
+        spendMonthKnown = false
+        spendToday = 0
+        spendMonth = 0
+        resetAt = snapshot.fetchedAt
+        lastUpdated = snapshot.fetchedAt
+        history = snapshot.history.isEmpty ? [UsagePoint(timestamp: snapshot.fetchedAt, value: snapshot.totalUsage)] : snapshot.history
+        dataSource = .live
+        sourceUpdatedAt = snapshot.fetchedAt
+        sourceDetail = "OpenRouter Credits API. Total credits and total usage are live; token buckets, request counts, and period spend are not exposed by this endpoint."
     }
 
     mutating func markSource(_ source: UsageDataSource, detail: String, now: Date = .now, clearUsage: Bool = false) {
@@ -292,6 +328,8 @@ struct ProviderUsage: Identifiable, Codable, Equatable {
             currencyCode = "USD"
             quotaLimitKnown = false
             requestCountKnown = false
+            spendTodayKnown = false
+            spendMonthKnown = false
         }
         dataSource = source
         sourceDetail = detail

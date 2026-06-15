@@ -98,14 +98,14 @@ enum APIMonitorCatalog {
             usageRequest: APIRequestTemplate(
                 method: "GET",
                 url: "https://openrouter.ai/api/v1/credits",
-                headers: ["Authorization: Bearer {OPENROUTER_API_KEY}"],
+                headers: ["Authorization: Bearer {OPENROUTER_API_KEY}", "Accept: application/json"],
                 body: nil
             ),
             costRequest: nil,
             subscriptionURL: "https://openrouter.ai/settings/credits",
             docsURL: "https://openrouter.ai/docs/api/api-reference/credits/get-credits",
             alertMetric: "Total credits purchased versus total usage",
-            note: "Use a management key when required by the account."
+            note: "Credits API returns total credits purchased and total usage. TokenBar uses this for live balance state; per-period tokens and request counts are not exposed here. Use a management-capable key when required by the account."
         ),
         APIMonitorSpec(
             id: "mistral",

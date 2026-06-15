@@ -10,7 +10,7 @@ struct ProbeTemplateLoader {
             ProbeTemplate(platform: "cursor", displayName: "Cursor", category: "AI Tool", symbolName: "cursorarrow.motionlines", unit: "requests"),
             ProbeTemplate(platform: "codex", displayName: "OpenAI Codex", category: "AI Tool", symbolName: "terminal.fill", unit: "requests"),
             ProbeTemplate(platform: "gemini", displayName: "Gemini", category: "AI & API", symbolName: "diamond.fill", unit: "tokens"),
-            ProbeTemplate(platform: "openrouter", displayName: "OpenRouter", category: "AI & API", symbolName: "point.3.connected.trianglepath.dotted", unit: "tokens"),
+            ProbeTemplate(platform: "openrouter", displayName: "OpenRouter", category: "AI & API", symbolName: "point.3.connected.trianglepath.dotted", unit: "credits"),
             ProbeTemplate(platform: "deepseek", displayName: "DeepSeek", category: "AI & API", symbolName: "magnifyingglass", unit: "tokens"),
             ProbeTemplate(platform: "mistral", displayName: "Mistral", category: "AI & API", symbolName: "wind", unit: "tokens"),
             ProbeTemplate(platform: "vercel", displayName: "Vercel", category: "Cloud", symbolName: "triangle.fill", unit: "requests"),

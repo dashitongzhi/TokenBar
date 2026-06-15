@@ -15,7 +15,11 @@ struct ProviderUsageStore {
               let providers = try? JSONDecoder.tokenBar.decode([ProviderUsage].self, from: data) else {
             return Self.normalized(defaults)
         }
-        return Self.normalized(providers)
+        var merged = Self.normalized(providers)
+        for defaultProvider in Self.normalized(defaults) where merged.contains(where: { $0.id == defaultProvider.id }) == false {
+            merged.append(defaultProvider)
+        }
+        return merged
     }
 
     func save(_ providers: [ProviderUsage]) {
@@ -55,6 +59,25 @@ struct ProviderUsageStore {
                     normalized.markSource(
                         .liveUnavailable,
                         detail: "Anthropic live usage requires ANTHROPIC_ADMIN_KEY in Keychain or the app environment. Use an Admin API key that starts with sk-ant-admin.",
+                        clearUsage: true
+                    )
+                }
+            } else if normalized.id == "openrouter" {
+                normalized.unit = "credits"
+                normalized.requestCountKnown = false
+                normalized.spendTodayKnown = normalized.dataSource == .live ? false : normalized.spendTodayKnown ?? false
+                normalized.spendMonthKnown = normalized.dataSource == .live ? false : normalized.spendMonthKnown ?? false
+                if normalized.dataSource != .live {
+                    let source = normalized.sourceKind == .error ? UsageDataSource.error : UsageDataSource.liveUnavailable
+                    let detail = normalized.sourceKind == .error && normalized.sourceDescription.isEmpty == false
+                        ? normalized.sourceDescription
+                        : "OpenRouter live credits require OPENROUTER_API_KEY in Keychain or the app environment."
+                    normalized.markSource(source, detail: detail, clearUsage: true)
+                }
+                if normalized.dataSource == nil {
+                    normalized.markSource(
+                        .liveUnavailable,
+                        detail: "OpenRouter live credits require OPENROUTER_API_KEY in Keychain or the app environment.",
                         clearUsage: true
                     )
                 }
