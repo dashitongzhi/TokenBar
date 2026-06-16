@@ -30,6 +30,8 @@ TokenBar includes a dependency-free local CLI at `bin/tokenbar`.
 ```bash
 ./bin/tokenbar status
 
+./bin/tokenbar policy init
+
 ./bin/tokenbar check \
   --agent claudeCode \
   --provider anthropic \
@@ -49,6 +51,24 @@ TokenBar includes a dependency-free local CLI at `bin/tokenbar`.
 The CLI first calls the running app's `POST /policy/evaluate` endpoint on `http://127.0.0.1:3847`. If the app is not running, it searches upward from the current directory for `tokenbar.yml` or `tokenbar.yaml` and evaluates the same workspace policy locally. If the app responds for a different workspace than the discovered config, the CLI also uses the local config instead of silently accepting the wrong workspace decision. That offline path is intentionally narrow: provider allowlists, blocked model substrings, per-run cost caps, daily budget projection, and company-key requirements mirror the current `PolicyEngine`.
 
 `tokenbar status` reports whether the local app API is reachable and which project config file will be used for offline checks.
+
+Use `tokenbar policy init` from a repo root to scaffold a project-local policy:
+
+```bash
+tokenbar policy init
+```
+
+It writes `./tokenbar.yml` with a workspace id/name inferred from the current directory, the current absolute path, conservative starter budgets, the provider allowlist consumed by `tokenbar check`, and blocked model substrings for high-cost model families. The generated file is immediately compatible with the CLI's offline evaluator and the app's current policy model: allowed providers, preferred provider, blocked models, per-run cap, daily/monthly budget fields, current spend fields, and company-key enforcement.
+
+To also wire project hooks:
+
+```bash
+tokenbar policy init --hooks all
+tokenbar policy init --codex-hooks
+tokenbar policy init --claude-hooks
+```
+
+Hook init writes `.codex/hooks.json` and/or `.claude/settings.local.json` using the working shell scripts in `examples/hooks/`. Existing files are left untouched unless you pass `--force`, so merge manually when a project already has hooks.
 
 ### `tokenbar.yml`
 
@@ -132,9 +152,9 @@ Example response:
 
 Working hook examples live in `examples/hooks/`.
 
-For Codex, copy or adapt `examples/hooks/codex-hooks.json` into `.codex/hooks.json`. Codex discovers project hooks from `.codex/hooks.json` or inline `.codex/config.toml` hook tables, and `UserPromptSubmit` hooks receive the prompt and model on stdin. See the [Codex hooks docs](https://developers.openai.com/codex/hooks).
+For the fastest setup, run `tokenbar policy init --codex-hooks` or `tokenbar policy init --hooks all` from the target repo. To wire it manually, copy or adapt `examples/hooks/codex-hooks.json` into `.codex/hooks.json`. Codex discovers project hooks from `.codex/hooks.json` or inline `.codex/config.toml` hook tables, and `UserPromptSubmit` hooks receive the prompt and model on stdin. See the [Codex hooks docs](https://developers.openai.com/codex/hooks).
 
-For Claude Code, merge `examples/hooks/claude-settings.example.json` into `.claude/settings.json` or `.claude/settings.local.json`. Claude Code `UserPromptSubmit` hooks can return a top-level `decision: "block"` with a `reason`, which the TokenBar example emits when `tokenbar check` returns `2`. See the [Claude Code hooks docs](https://docs.anthropic.com/en/docs/claude-code/hooks).
+For Claude Code, run `tokenbar policy init --claude-hooks` or merge `examples/hooks/claude-settings.example.json` into `.claude/settings.json` or `.claude/settings.local.json`. Claude Code `UserPromptSubmit` hooks can return a top-level `decision: "block"` with a `reason`, which the TokenBar example emits when `tokenbar check` returns `2`. See the [Claude Code hooks docs](https://docs.anthropic.com/en/docs/claude-code/hooks).
 
 Both shell hooks accept these environment overrides:
 
@@ -212,7 +232,7 @@ This is a releaseable early product shell:
 - Workspace policy cards
 - Menu bar decision popover
 - Local API for agent preflight checks
-- CLI preflight with `tokenbar status`, `tokenbar check`, upward `tokenbar.yml` lookup, and offline policy fallback
+- CLI preflight with `tokenbar status`, `tokenbar check`, `tokenbar policy init`, upward `tokenbar.yml` lookup, and offline policy fallback
 - Working Codex and Claude Code `UserPromptSubmit` hook examples
 - OpenAI organization usage and cost adapter with Keychain-backed admin key storage
 - Anthropic Usage and Cost Admin API adapter with matching Keychain-backed admin key storage

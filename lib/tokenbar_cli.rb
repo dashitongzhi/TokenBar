@@ -2,6 +2,7 @@
 # frozen_string_literal: true
 
 require "json"
+require "fileutils"
 require "net/http"
 require "open3"
 require "optparse"
@@ -34,7 +35,7 @@ module TokenBarCLI
     }
 
     global = OptionParser.new do |opts|
-      opts.banner = "Usage: tokenbar [--api-url URL] [--config PATH] <status|check> [options]"
+      opts.banner = "Usage: tokenbar [--api-url URL] [--config PATH] <status|check|policy> [options]"
       opts.on("--api-url URL", "TokenBar local API URL (default: #{DEFAULT_API_URL})") { |value| options[:api_url] = value }
       opts.on("--config PATH", "Use a specific tokenbar.yml instead of upward lookup") { |value| options[:config_path] = value }
       opts.on("--json", "Print machine-readable JSON") { options[:json] = true }
@@ -46,13 +47,15 @@ module TokenBarCLI
     global.order!(argv)
 
     command = argv.shift
-    raise Error, "missing command: use status or check" unless command
+    raise Error, "missing command: use status, check, or policy" unless command
 
     case command
     when "status"
       status(options, argv)
     when "check"
       check(options, argv)
+    when "policy"
+      policy(options, argv)
     else
       raise Error, "unknown command: #{command}"
     end
@@ -155,6 +158,101 @@ module TokenBarCLI
     exit(EXIT_BY_STATUS.fetch(status, 3))
   end
 
+  def policy(options, argv)
+    subcommand = argv.shift
+    raise Error, "missing policy command: use init" unless subcommand
+
+    case subcommand
+    when "init"
+      policy_init(options, argv)
+    else
+      raise Error, "unknown policy command: #{subcommand}"
+    end
+  end
+
+  def policy_init(options, argv)
+    root = repo_root
+    cwd = Pathname.pwd.expand_path
+    init_options = {
+      output: cwd.join("tokenbar.yml"),
+      workspace_id: slug(cwd.basename.to_s),
+      workspace_name: titleize(cwd.basename.to_s),
+      workspace_path: cwd.to_s,
+      client: "local",
+      daily_budget: 8.00,
+      monthly_budget: 160.00,
+      max_run: 1.50,
+      spend_today: 0.00,
+      spend_month: 0.00,
+      allowed_providers: %w[anthropic openai openrouter],
+      preferred_provider: "anthropic",
+      require_company_key: false,
+      blocked_models: %w[opus gpt-5-pro],
+      hooks: [],
+      force: false
+    }
+
+    parser = OptionParser.new do |opts|
+      opts.banner = "Usage: tokenbar policy init [--hooks codex,claude|all] [options]"
+      opts.on("--output PATH", "Write policy YAML to PATH (default: ./tokenbar.yml)") { |value| init_options[:output] = Pathname.new(value).expand_path }
+      opts.on("--workspace-id ID", "Workspace id (default: current directory slug)") { |value| init_options[:workspace_id] = value }
+      opts.on("--workspace-name NAME", "Workspace display name (default: current directory name)") { |value| init_options[:workspace_name] = value }
+      opts.on("--client CLIENT", "Client or owner label (default: local)") { |value| init_options[:client] = value }
+      opts.on("--daily-budget USD", Float, "Daily budget in USD (default: 8.00)") { |value| init_options[:daily_budget] = value }
+      opts.on("--monthly-budget USD", Float, "Monthly budget in USD (default: 160.00)") { |value| init_options[:monthly_budget] = value }
+      opts.on("--max-run-cost USD", Float, "Per-run cost cap in USD (default: 1.50)") { |value| init_options[:max_run] = value }
+      opts.on("--allowed-providers LIST", "Comma-separated providers (default: anthropic,openai,openrouter)") { |value| init_options[:allowed_providers] = split_list(value) }
+      opts.on("--preferred-provider PROVIDER", "Preferred provider (default: anthropic)") { |value| init_options[:preferred_provider] = value }
+      opts.on("--require-company-key", "Block OpenAI runs unless company-key policy is satisfied") { init_options[:require_company_key] = true }
+      opts.on("--blocked-models LIST", "Comma-separated blocked model substrings (default: opus,gpt-5-pro)") { |value| init_options[:blocked_models] = split_list(value) }
+      opts.on("--hooks LIST", "Write hook config for codex, claude, or all") { |value| init_options[:hooks] = parse_hooks(value) }
+      opts.on("--codex-hooks", "Write .codex/hooks.json") { init_options[:hooks] |= ["codex"] }
+      opts.on("--claude-hooks", "Write .claude/settings.local.json") { init_options[:hooks] |= ["claude"] }
+      opts.on("--force", "Overwrite generated files if they already exist") { init_options[:force] = true }
+      opts.on("--json", "Print machine-readable JSON") { options[:json] = true }
+      opts.on("-h", "--help", "Show help") do
+        puts opts
+        exit 0
+      end
+    end
+    parser.parse!(argv)
+
+    validate_init_options!(init_options)
+    targets = [[init_options[:output], policy_yaml(init_options)]]
+    targets += init_options[:hooks].map { |hook| hook_file(hook, cwd, root) }
+    preflight_writes!(targets.map(&:first), force: init_options[:force])
+    targets.each { |path, body| write_file(path, body) }
+    written = targets.map { |path, _body| path.to_s }
+
+    config = load_config(init_options[:output].to_s)
+    sample_input = {
+      "agent" => "codex",
+      "workspaceID" => init_options[:workspace_id],
+      "providerID" => init_options[:preferred_provider],
+      "model" => default_model(init_options[:preferred_provider]),
+      "estimatedCost" => 0.0,
+      "estimatedTokens" => 0,
+      "intent" => "policy_init_smoke"
+    }
+    decision = offline_policy_response(sample_input, config).fetch("decision")
+
+    payload = {
+      "policy" => init_options[:output].to_s,
+      "hooks" => init_options[:hooks],
+      "written" => written,
+      "smokeDecision" => {
+        "status" => decision["status"],
+        "reasons" => decision["reasons"]
+      }
+    }
+
+    if options[:json]
+      puts JSON.pretty_generate(payload)
+    else
+      print_policy_init(payload)
+    end
+  end
+
   def fetch_api_status(api_url)
     health = http_get(api_url, "/health")
     policy = http_get(api_url, "/policy")
@@ -224,6 +322,159 @@ module TokenBarCLI
     base.path = path
     base.query = nil
     base
+  end
+
+  def repo_root
+    Pathname.new(__dir__).parent.expand_path
+  end
+
+  def split_list(value)
+    value.to_s.split(",").map(&:strip).reject(&:empty?)
+  end
+
+  def parse_hooks(value)
+    hooks = split_list(value).flat_map do |item|
+      case item
+      when "all" then %w[codex claude]
+      when "none" then []
+      else item
+      end
+    end.uniq
+    invalid = hooks - %w[codex claude]
+    raise Error, "--hooks must be codex, claude, all, or none" unless invalid.empty?
+
+    hooks
+  end
+
+  def slug(value)
+    slugged = value.downcase.gsub(/[^a-z0-9]+/, "-").gsub(/^-|-$/, "")
+    slugged.empty? ? "workspace" : slugged
+  end
+
+  def titleize(value)
+    words = value.tr("_-", " ").split
+    return "Workspace" if words.empty?
+
+    words.map { |word| word[0].upcase + word[1..].to_s }.join(" ")
+  end
+
+  def validate_init_options!(options)
+    raise Error, "--workspace-id cannot be empty" if blank?(options[:workspace_id])
+    raise Error, "--workspace-name cannot be empty" if blank?(options[:workspace_name])
+    raise Error, "--daily-budget must be >= 0" if options[:daily_budget].negative?
+    raise Error, "--monthly-budget must be >= 0" if options[:monthly_budget].negative?
+    raise Error, "--max-run-cost must be > 0" unless options[:max_run].positive?
+    raise Error, "--allowed-providers cannot be empty" if options[:allowed_providers].empty?
+    unless options[:allowed_providers].include?(options[:preferred_provider])
+      raise Error, "--preferred-provider must be included in --allowed-providers"
+    end
+  end
+
+  def policy_yaml(options)
+    lines = [
+      "version: 1",
+      "",
+      "workspace:",
+      "  id: #{yaml_scalar(options[:workspace_id])}",
+      "  name: #{yaml_scalar(options[:workspace_name])}",
+      "  path: #{yaml_scalar(options[:workspace_path])}",
+      "  client: #{yaml_scalar(options[:client])}",
+      "",
+      "budgets:",
+      "  daily: #{money(options[:daily_budget])}",
+      "  monthly: #{money(options[:monthly_budget])}",
+      "  max_run: #{money(options[:max_run])}",
+      "  spend_today: #{money(options[:spend_today])}",
+      "  spend_month: #{money(options[:spend_month])}",
+      "",
+      "providers:",
+      "  allowed:",
+      *options[:allowed_providers].map { |provider| "    - #{yaml_scalar(provider)}" },
+      "  preferred: #{yaml_scalar(options[:preferred_provider])}",
+      "  require_company_key: #{options[:require_company_key] ? "true" : "false"}",
+      "",
+      "models:"
+    ]
+    if options[:blocked_models].empty?
+      lines << "  blocked: []"
+    else
+      lines << "  blocked:"
+      lines.concat(options[:blocked_models].map { |model| "    - #{yaml_scalar(model)}" })
+    end
+    lines << ""
+    lines.join("\n")
+  end
+
+  def yaml_scalar(value)
+    string = value.to_s
+    return "\"\"" if string.empty?
+    return string if string.match?(/\A[a-zA-Z0-9_.\/~:-]+\z/) && !%w[true false null yes no on off].include?(string.downcase)
+
+    string.inspect
+  end
+
+  def money(value)
+    format("%.2f", value)
+  end
+
+  def hook_file(hook, cwd, root)
+    case hook
+    when "codex"
+      [
+        cwd.join(".codex/hooks.json"),
+        JSON.pretty_generate(
+          "hooks" => {
+            "UserPromptSubmit" => [
+              {
+                "hooks" => [
+                  {
+                    "type" => "command",
+                    "command" => "TOKENBAR_BIN=#{root.join("bin/tokenbar").to_s.inspect} #{root.join("examples/hooks/codex-tokenbar-user-prompt-submit.sh").to_s.inspect}",
+                    "timeout" => 10,
+                    "statusMessage" => "Checking TokenBar policy"
+                  }
+                ]
+              }
+            ]
+          }
+        ) + "\n"
+      ]
+    when "claude"
+      [
+        cwd.join(".claude/settings.local.json"),
+        JSON.pretty_generate(
+          "hooks" => {
+            "UserPromptSubmit" => [
+              {
+                "hooks" => [
+                  {
+                    "type" => "command",
+                    "command" => "TOKENBAR_BIN=#{root.join("bin/tokenbar").to_s.inspect} #{root.join("examples/hooks/claude-tokenbar-user-prompt-submit.sh").to_s.inspect}",
+                    "timeout" => 10
+                  }
+                ]
+              }
+            ]
+          }
+        ) + "\n"
+      ]
+    else
+      raise Error, "unsupported hook target: #{hook}"
+    end
+  end
+
+  def preflight_writes!(paths, force:)
+    return if force
+
+    existing = paths.select(&:exist?)
+    return if existing.empty?
+
+    raise Error, "#{existing.first} already exists; pass --force to overwrite"
+  end
+
+  def write_file(path, body)
+    FileUtils.mkdir_p(path.dirname)
+    path.write(body)
   end
 
   def load_config(explicit_path)
@@ -442,6 +693,24 @@ module TokenBarCLI
     puts
     puts "Recommendation:"
     puts decision["recommendation"]
+  end
+
+  def print_policy_init(payload)
+    puts "Created TokenBar policy:"
+    puts "- #{payload["policy"]}"
+
+    unless payload["hooks"].empty?
+      puts
+      puts "Created hook config:"
+      payload["written"].drop(1).each { |path| puts "- #{path}" }
+    end
+
+    smoke = payload["smokeDecision"]
+    puts
+    puts "Smoke check: #{smoke["status"].to_s.upcase}"
+    Array(smoke["reasons"]).each { |reason| puts "- #{reason}" }
+    puts
+    puts "Next: run tokenbar check --agent codex --provider #{load_config(payload["policy"]).dig("providers", "preferred")} --model #{default_model(load_config(payload["policy"]).dig("providers", "preferred"))}"
   end
 
   def numeric_env(name, fallback)
