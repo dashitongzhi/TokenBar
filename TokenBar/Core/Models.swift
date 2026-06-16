@@ -120,6 +120,7 @@ enum LocalAPIStatus: Equatable {
 
 enum UsageDataSource: String, Codable {
     case live
+    case localAgent
     case liveUnavailable
     case unsupported
     case error
@@ -249,6 +250,10 @@ struct ProviderUsage: Identifiable, Codable, Equatable {
         sourceKind == .live
     }
 
+    var isUsageConnected: Bool {
+        sourceKind == .live || sourceKind == .localAgent
+    }
+
     mutating func apply(snapshot: OpenAIUsageSnapshot) {
         current = snapshot.tokenTotal
         limit = 0
@@ -315,6 +320,43 @@ struct ProviderUsage: Identifiable, Codable, Equatable {
         sourceDetail = "OpenRouter Credits API. Total credits and total usage are live; token buckets, request counts, and period spend are not exposed by this endpoint."
     }
 
+    mutating func apply(localUsage: LocalAgentUsageAppliedSnapshot) {
+        if localUsage.contextTokenTotal > 0 {
+            current = localUsage.contextTokenTotal
+        } else if localUsage.tokenDelta > 0 {
+            current += localUsage.tokenDelta
+        }
+        if let contextWindowSize = localUsage.contextWindowSize, contextWindowSize > 0 {
+            limit = contextWindowSize
+            quotaLimitKnown = true
+        } else {
+            limit = 0
+            quotaLimitKnown = false
+        }
+        unit = "tokens"
+        tokensToday = max((tokensToday ?? 0) + localUsage.tokenDelta, localUsage.contextTokenTotal)
+        if localUsage.requestDelta > 0 {
+            requestCountToday = (requestCountToday ?? 0) + localUsage.requestDelta
+            requestCountMonth = (requestCountMonth ?? 0) + localUsage.requestDelta
+            requestCountKnown = true
+        }
+        currencyCode = "USD"
+        spendTodayKnown = true
+        spendMonthKnown = true
+        spendToday += localUsage.costDelta
+        spendMonth += localUsage.costDelta
+        resetAt = localUsage.rateLimitResetAt ?? resetAt
+        lastUpdated = localUsage.occurredAt
+        let historyValue = localUsage.contextTokenTotal > 0 ? localUsage.contextTokenTotal : current
+        history.append(UsagePoint(timestamp: localUsage.occurredAt, value: historyValue))
+        if history.count > 48 {
+            history.removeFirst(history.count - 48)
+        }
+        dataSource = .localAgent
+        sourceUpdatedAt = localUsage.occurredAt
+        sourceDetail = localUsage.sourceDetail
+    }
+
     mutating func markSource(_ source: UsageDataSource, detail: String, now: Date = .now, clearUsage: Bool = false) {
         if clearUsage {
             current = 0
@@ -336,6 +378,54 @@ struct ProviderUsage: Identifiable, Codable, Equatable {
         sourceUpdatedAt = now
         lastUpdated = now
     }
+}
+
+struct LocalAgentUsageIngest: Codable, Equatable {
+    var agent: AgentProvider?
+    var providerID: String?
+    var model: String?
+    var workspaceID: String?
+    var workspaceName: String?
+    var workspacePath: String?
+    var workspaceClient: String?
+    var dailyBudget: Double?
+    var monthlyBudget: Double?
+    var maxEstimatedRunCost: Double?
+    var allowedProviderIDs: [String]?
+    var blockedModels: [String]?
+    var requireCompanyKey: Bool?
+    var sessionID: String?
+    var source: String?
+    var currentDirectory: String?
+    var transcriptPath: String?
+    var costUSD: Double?
+    var inputTokens: Int?
+    var outputTokens: Int?
+    var totalTokens: Int?
+    var contextWindowSize: Int?
+    var requestCount: Int?
+    var occurredAt: Date?
+    var rateLimitUsedPercentage: Double?
+    var rateLimitResetAt: Date?
+    var cumulative: Bool?
+}
+
+struct LocalAgentUsageAppliedSnapshot: Equatable {
+    var agent: AgentProvider
+    var providerID: String
+    var model: String
+    var workspaceID: String?
+    var sessionKey: String
+    var sourceName: String
+    var costDelta: Double
+    var tokenDelta: Double
+    var requestDelta: Int
+    var contextTokenTotal: Double
+    var contextWindowSize: Double?
+    var rateLimitUsedPercentage: Double?
+    var rateLimitResetAt: Date?
+    var occurredAt: Date
+    var sourceDetail: String
 }
 
 enum APIMonitorCapability: String, Codable {

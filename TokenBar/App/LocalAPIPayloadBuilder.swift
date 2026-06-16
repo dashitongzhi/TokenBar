@@ -33,6 +33,34 @@ enum LocalAPIPayloadBuilder {
         return jsonData(payload)
     }
 
+    static func localAgentUsageJSON(snapshot: LocalAgentUsageAppliedSnapshot, decision: PolicyDecision) -> Data {
+        let payload: [String: Any] = [
+            "version": "1.0",
+            "timestamp": ISO8601DateFormatter().string(from: Date()),
+            "localOnly": true,
+            "source": snapshot.sourceName,
+            "usage": [
+                "agent": snapshot.agent.displayName,
+                "provider": snapshot.providerID,
+                "model": snapshot.model,
+                "workspaceID": snapshot.workspaceID ?? NSNull(),
+                "sessionKey": snapshot.sessionKey,
+                "dataSource": UsageDataSource.localAgent.rawValue,
+                "costDelta": snapshot.costDelta,
+                "tokenDelta": snapshot.tokenDelta,
+                "requestDelta": snapshot.requestDelta,
+                "contextTokenTotal": snapshot.contextTokenTotal,
+                "contextWindowSize": snapshot.contextWindowSize ?? NSNull(),
+                "rateLimitUsedPercentage": snapshot.rateLimitUsedPercentage ?? NSNull(),
+                "rateLimitResetAt": snapshot.rateLimitResetAt.map { ISO8601DateFormatter().string(from: $0) } ?? NSNull(),
+                "occurredAt": ISO8601DateFormatter().string(from: snapshot.occurredAt),
+                "sourceDetail": snapshot.sourceDetail
+            ] as [String: Any],
+            "decision": policyDictionary(decision)
+        ]
+        return jsonData(payload)
+    }
+
     static func mcpSnapshotJSON(providers: [ProviderUsage], filteredProviderID: String? = nil) -> Data {
         let selected = filteredProviderID.map { id in providers.filter { $0.id == id } } ?? providers
         let quotas = selected.map { provider in

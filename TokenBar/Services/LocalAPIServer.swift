@@ -61,7 +61,7 @@ final class LocalAPIServer {
 
     private nonisolated func handle(_ connection: NWConnection) {
         connection.start(queue: queue)
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 4096) { [weak self] data, _, _, _ in
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { [weak self] data, _, _, _ in
             guard let self else {
                 connection.cancel()
                 return
@@ -122,6 +122,20 @@ final class LocalAPIServer {
             return appState.policyDecisionJSON(input: input)
         }
 
+        if path == "/usage/ingest" {
+            guard let input = localAgentUsageInput(from: request) else {
+                return Data(#"{"error":"invalid_local_usage_input"}"#.utf8)
+            }
+            return appState.ingestLocalAgentUsageJSON(input: input)
+        }
+
+        if path == "/usage/claude-statusline" {
+            guard let data = bodyData(from: request) else {
+                return Data(#"{"error":"invalid_claude_statusline_input"}"#.utf8)
+            }
+            return appState.ingestClaudeStatuslineJSON(data: data)
+        }
+
         if path == "/quotas" {
             return appState.mcpSnapshotJSON()
         }
@@ -140,11 +154,20 @@ final class LocalAPIServer {
     }
 
     private func policyInput(from request: String) -> PolicyEvaluationInput? {
+        guard let data = bodyData(from: request) else { return nil }
+        return try? JSONDecoder.tokenBar.decode(PolicyEvaluationInput.self, from: data)
+    }
+
+    private func localAgentUsageInput(from request: String) -> LocalAgentUsageIngest? {
+        guard let data = bodyData(from: request) else { return nil }
+        return try? JSONDecoder.tokenBar.decode(LocalAgentUsageIngest.self, from: data)
+    }
+
+    private func bodyData(from request: String) -> Data? {
         let marker = "\r\n\r\n"
         guard let range = request.range(of: marker) else { return nil }
         let body = String(request[range.upperBound...])
-        guard let data = body.data(using: .utf8) else { return nil }
-        return try? JSONDecoder.tokenBar.decode(PolicyEvaluationInput.self, from: data)
+        return body.data(using: .utf8)
     }
 
     private nonisolated func httpResponse(body: Data) -> Data {

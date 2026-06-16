@@ -32,6 +32,14 @@ TokenBar includes a dependency-free local CLI at `bin/tokenbar`.
 
 ./bin/tokenbar policy init
 
+./bin/tokenbar usage ingest \
+  --agent claudeCode \
+  --provider anthropic \
+  --model claude-sonnet \
+  --session-id local-demo \
+  --cost-usd 0.12 \
+  --total-tokens 24000
+
 ./bin/tokenbar check \
   --agent claudeCode \
   --provider anthropic \
@@ -51,6 +59,16 @@ TokenBar includes a dependency-free local CLI at `bin/tokenbar`.
 The CLI first calls the running app's `POST /policy/evaluate` endpoint on `http://127.0.0.1:3847`. If the app is not running, it searches upward from the current directory for `tokenbar.yml` or `tokenbar.yaml` and evaluates the same workspace policy locally. If the app responds for a different workspace than the discovered config, the CLI also uses the local config instead of silently accepting the wrong workspace decision. That offline path is intentionally narrow: provider allowlists, blocked model substrings, per-run cost caps, daily budget projection, and company-key requirements mirror the current `PolicyEngine`.
 
 `tokenbar status` reports whether the local app API is reachable and which project config file will be used for offline checks.
+
+`tokenbar usage ingest` sends real local agent usage into the running app. The CLI enriches the usage payload with the nearest `tokenbar.yml` policy, so the app can upsert that workspace, update provider cards, and include local spend in later guard decisions. By default, usage values are treated as cumulative session totals and TokenBar de-duplicates them by `--session-id` or transcript path; pass `--event` when the cost/tokens represent a single event delta.
+
+Claude Code statusline ingestion is available as a one-line bridge:
+
+```bash
+tokenbar usage claude-statusline
+```
+
+Claude Code passes statusline JSON on stdin. TokenBar extracts the local session id, transcript path, model, cost, token, context-window, and rate-limit fields it recognizes, applies the same de-duplication ledger, and prints a compact statusline string unless `--json` is supplied.
 
 Use `tokenbar policy init` from a repo root to scaffold a project-local policy:
 
@@ -110,6 +128,7 @@ The repo includes its own `tokenbar.yml`, so you can dogfood the offline flow im
 ```bash
 curl http://127.0.0.1:3847/health
 curl http://127.0.0.1:3847/policy
+curl http://127.0.0.1:3847/quotas/anthropic
 ```
 
 Evaluate a proposed agent run:
@@ -148,6 +167,27 @@ Example response:
 }
 ```
 
+Ingest local agent usage:
+
+```bash
+curl -X POST http://127.0.0.1:3847/usage/ingest \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "agent": "claudeCode",
+    "providerID": "anthropic",
+    "model": "claude-sonnet",
+    "workspaceID": "client-app",
+    "sessionID": "demo-session",
+    "source": "Claude Code statusline",
+    "costUSD": 0.12,
+    "totalTokens": 24000,
+    "contextWindowSize": 200000,
+    "cumulative": true
+  }'
+```
+
+Direct Claude Code statusline JSON can also be posted to `POST /usage/claude-statusline`, but the CLI bridge is preferred because it attaches the nearest `tokenbar.yml` policy before ingestion.
+
 ## Agent Hook Examples
 
 Working hook examples live in `examples/hooks/`.
@@ -167,6 +207,12 @@ TOKENBAR_ESTIMATED_TOKENS=20000
 TOKENBAR_INTENT=refactor
 ```
 
+For Claude Code statusline ingestion, merge the `statusLine` block from `examples/hooks/claude-settings.example.json` or run the helper directly:
+
+```bash
+TOKENBAR_BIN=/absolute/path/to/tokenbar examples/hooks/claude-tokenbar-statusline.sh
+```
+
 ## Live Provider Usage
 
 TokenBar supports live provider usage for:
@@ -180,6 +226,7 @@ Keys can be saved from Settings into the macOS Keychain, or supplied through the
 Provider source badges are deliberately literal:
 
 - `Live`: TokenBar fetched provider data successfully.
+- `Local`: TokenBar ingested local agent usage, such as Claude Code statusline data. This is useful for provider cards and guard decisions, but it is not a provider-admin billing API.
 - `Needs key`: the provider has a live adapter, but no usable admin key is available.
 - `Error`: the live adapter ran and the provider returned an error or unreadable response.
 - `Unsupported`: TokenBar has metadata for the provider, but no live adapter yet.
@@ -208,6 +255,7 @@ Run the CLI smoke checks:
 
 ```bash
 ./bin/tokenbar status
+./bin/tokenbar usage ingest --agent claudeCode --provider anthropic --model claude-sonnet --session-id smoke --cost-usd 0.12 --total-tokens 24000 --json
 ./bin/tokenbar check --agent codex --provider anthropic --model claude-sonnet --estimated-cost 0.20 --estimated-tokens 12000 --intent debug
 ./bin/tokenbar check --agent claudeCode --provider anthropic --model claude-opus --estimated-cost 2.40 --estimated-tokens 180000 --intent refactor
 ```
@@ -234,10 +282,11 @@ This is a releaseable early product shell:
 - Local API for agent preflight checks
 - CLI preflight with `tokenbar status`, `tokenbar check`, `tokenbar policy init`, upward `tokenbar.yml` lookup, and offline policy fallback
 - Working Codex and Claude Code `UserPromptSubmit` hook examples
+- Claude Code statusline/local usage ingestion with session de-duplication and app workspace policy upsert
 - OpenAI organization usage and cost adapter with Keychain-backed admin key storage
 - Anthropic Usage and Cost Admin API adapter with matching Keychain-backed admin key storage
 - OpenRouter Credits API adapter with matching Keychain-backed API key storage
 - Provider source badges that distinguish live data, missing credentials, adapter errors, and unsupported providers
 - API monitor catalog retained as an integration surface
 
-The next production step is adding more real adapters, such as Claude Code statusline data or provider-specific rate-limit headers.
+The next production step is adding more real adapters, such as Codex local usage records or provider-specific rate-limit headers.

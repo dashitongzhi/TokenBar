@@ -32,7 +32,7 @@ struct ProviderUsageStore {
             var normalized = provider
             if normalized.id == "openai" {
                 normalized.quotaLimitKnown = normalized.dataSource == .live ? false : normalized.quotaLimitKnown ?? false
-                if normalized.dataSource != .live {
+                if normalized.dataSource != .live && normalized.dataSource != .localAgent {
                     let source = normalized.sourceKind == .error ? UsageDataSource.error : UsageDataSource.liveUnavailable
                     let detail = normalized.sourceKind == .error && normalized.sourceDescription.isEmpty == false
                         ? normalized.sourceDescription
@@ -48,7 +48,7 @@ struct ProviderUsageStore {
                 }
             } else if normalized.id == "anthropic" {
                 normalized.quotaLimitKnown = normalized.dataSource == .live ? false : normalized.quotaLimitKnown ?? false
-                if normalized.dataSource != .live {
+                if normalized.dataSource != .live && normalized.dataSource != .localAgent {
                     let source = normalized.sourceKind == .error ? UsageDataSource.error : UsageDataSource.liveUnavailable
                     let detail = normalized.sourceKind == .error && normalized.sourceDescription.isEmpty == false
                         ? normalized.sourceDescription
@@ -63,11 +63,13 @@ struct ProviderUsageStore {
                     )
                 }
             } else if normalized.id == "openrouter" {
-                normalized.unit = "credits"
-                normalized.requestCountKnown = false
+                if normalized.dataSource != .localAgent {
+                    normalized.unit = "credits"
+                    normalized.requestCountKnown = false
+                }
                 normalized.spendTodayKnown = normalized.dataSource == .live ? false : normalized.spendTodayKnown ?? false
                 normalized.spendMonthKnown = normalized.dataSource == .live ? false : normalized.spendMonthKnown ?? false
-                if normalized.dataSource != .live {
+                if normalized.dataSource != .live && normalized.dataSource != .localAgent {
                     let source = normalized.sourceKind == .error ? UsageDataSource.error : UsageDataSource.liveUnavailable
                     let detail = normalized.sourceKind == .error && normalized.sourceDescription.isEmpty == false
                         ? normalized.sourceDescription
@@ -81,7 +83,7 @@ struct ProviderUsageStore {
                         clearUsage: true
                     )
                 }
-            } else if normalized.dataSource == nil || normalized.sourceKind != .unsupported {
+            } else if normalized.dataSource == nil || (normalized.sourceKind != .unsupported && normalized.sourceKind != .localAgent) {
                 normalized.markSource(
                     .unsupported,
                     detail: "TokenBar does not have a live adapter for this provider yet.",

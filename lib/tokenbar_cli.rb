@@ -35,7 +35,7 @@ module TokenBarCLI
     }
 
     global = OptionParser.new do |opts|
-      opts.banner = "Usage: tokenbar [--api-url URL] [--config PATH] <status|check|policy> [options]"
+      opts.banner = "Usage: tokenbar [--api-url URL] [--config PATH] <status|check|policy|usage> [options]"
       opts.on("--api-url URL", "TokenBar local API URL (default: #{DEFAULT_API_URL})") { |value| options[:api_url] = value }
       opts.on("--config PATH", "Use a specific tokenbar.yml instead of upward lookup") { |value| options[:config_path] = value }
       opts.on("--json", "Print machine-readable JSON") { options[:json] = true }
@@ -47,7 +47,7 @@ module TokenBarCLI
     global.order!(argv)
 
     command = argv.shift
-    raise Error, "missing command: use status, check, or policy" unless command
+    raise Error, "missing command: use status, check, policy, or usage" unless command
 
     case command
     when "status"
@@ -56,6 +56,8 @@ module TokenBarCLI
       check(options, argv)
     when "policy"
       policy(options, argv)
+    when "usage"
+      usage(options, argv)
     else
       raise Error, "unknown command: #{command}"
     end
@@ -253,6 +255,112 @@ module TokenBarCLI
     end
   end
 
+  def usage(options, argv)
+    subcommand = argv.shift
+    raise Error, "missing usage command: use ingest or claude-statusline" unless subcommand
+
+    case subcommand
+    when "ingest"
+      usage_ingest(options, argv)
+    when "claude-statusline"
+      usage_claude_statusline(options, argv)
+    else
+      raise Error, "unknown usage command: #{subcommand}"
+    end
+  end
+
+  def usage_ingest(options, argv)
+    input = {
+      "agent" => ENV.fetch("TOKENBAR_AGENT", "custom"),
+      "providerID" => ENV["TOKENBAR_PROVIDER"],
+      "model" => ENV["TOKENBAR_MODEL"],
+      "workspaceID" => nil,
+      "sessionID" => ENV["TOKENBAR_SESSION_ID"],
+      "source" => "tokenbar_cli",
+      "currentDirectory" => Dir.pwd,
+      "costUSD" => numeric_env("TOKENBAR_COST_USD", 0.0),
+      "inputTokens" => integer_env("TOKENBAR_INPUT_TOKENS", 0),
+      "outputTokens" => integer_env("TOKENBAR_OUTPUT_TOKENS", 0),
+      "totalTokens" => nil,
+      "requestCount" => nil,
+      "cumulative" => true
+    }
+    output_json = options[:json]
+
+    parser = OptionParser.new do |opts|
+      opts.banner = "Usage: tokenbar usage ingest --agent AGENT --provider PROVIDER --model MODEL [options]"
+      opts.on("--agent AGENT", "claudeCode, codex, cursor, continueDev, or custom") { |value| input["agent"] = value }
+      opts.on("--workspace-id ID", "Workspace id (default: tokenbar.yml workspace id)") { |value| input["workspaceID"] = value }
+      opts.on("--provider PROVIDER", "Provider id, such as anthropic or openai") { |value| input["providerID"] = value }
+      opts.on("--model MODEL", "Model name or slug") { |value| input["model"] = value }
+      opts.on("--session-id ID", "Stable local agent session id") { |value| input["sessionID"] = value }
+      opts.on("--source NAME", "Usage source label") { |value| input["source"] = value }
+      opts.on("--cwd PATH", "Workspace path reported by the local agent") { |value| input["currentDirectory"] = value }
+      opts.on("--cost-usd USD", Float, "Cumulative session cost in USD") { |value| input["costUSD"] = value }
+      opts.on("--input-tokens TOKENS", Integer, "Cumulative input tokens") { |value| input["inputTokens"] = value }
+      opts.on("--output-tokens TOKENS", Integer, "Cumulative output tokens") { |value| input["outputTokens"] = value }
+      opts.on("--total-tokens TOKENS", Integer, "Cumulative total tokens") { |value| input["totalTokens"] = value }
+      opts.on("--request-count COUNT", Integer, "Cumulative request count") { |value| input["requestCount"] = value }
+      opts.on("--context-window-size TOKENS", Integer, "Context window token limit") { |value| input["contextWindowSize"] = value }
+      opts.on("--event", "Treat cost/tokens as this event only, not cumulative session totals") { input["cumulative"] = false }
+      opts.on("--json", "Print machine-readable JSON") { output_json = true }
+      opts.on("-h", "--help", "Show help") do
+        puts opts
+        exit 0
+      end
+    end
+    parser.parse!(argv)
+
+    config = load_config(options[:config_path])
+    attach_config_policy!(input, config)
+    input["providerID"] ||= provider_from_model_or_agent(input["model"], input["agent"])
+    input["model"] ||= default_model(input["providerID"])
+    input["totalTokens"] ||= input["inputTokens"].to_i + input["outputTokens"].to_i
+    validate_usage_input!(input)
+
+    response = post_local_usage_ingest(options[:api_url], input)
+    raise Error, "TokenBar app is not running; local usage ingestion requires the app API" unless response
+
+    if output_json
+      puts JSON.pretty_generate(response)
+    else
+      print_usage_ingest(response)
+    end
+  end
+
+  def usage_claude_statusline(options, argv)
+    output_json = options[:json]
+    parser = OptionParser.new do |opts|
+      opts.banner = "Usage: tokenbar usage claude-statusline [--json]"
+      opts.on("--json", "Print machine-readable JSON instead of a statusline string") { output_json = true }
+      opts.on("-h", "--help", "Show help") do
+        puts opts
+        exit 0
+      end
+    end
+    parser.parse!(argv)
+
+    raw = STDIN.read
+    payload = JSON.parse(raw)
+    input = claude_statusline_usage_input(payload)
+    config = load_config(options[:config_path])
+    attach_config_policy!(input, config)
+    input["providerID"] ||= provider_from_model_or_agent(input["model"], input["agent"])
+    input["model"] ||= default_model(input["providerID"])
+    validate_usage_input!(input)
+
+    response = post_local_usage_ingest(options[:api_url], input)
+    raise Error, "TokenBar app is not running; Claude Code statusline ingestion requires the app API" unless response
+
+    if output_json
+      puts JSON.pretty_generate(response)
+    else
+      print_claude_statusline(response)
+    end
+  rescue JSON::ParserError => e
+    raise Error, "invalid Claude Code statusline JSON: #{e.message}"
+  end
+
   def fetch_api_status(api_url)
     health = http_get(api_url, "/health")
     policy = http_get(api_url, "/policy")
@@ -265,7 +373,15 @@ module TokenBarCLI
   end
 
   def post_policy_evaluate(api_url, input)
-    uri = endpoint(api_url, "/policy/evaluate")
+    post_json(api_url, "/policy/evaluate", input)
+  end
+
+  def post_local_usage_ingest(api_url, input)
+    post_json(api_url, "/usage/ingest", compact_hash(input))
+  end
+
+  def post_json(api_url, path, input)
+    uri = endpoint(api_url, path)
     if curl_available?
       body = curl_request(["-X", "POST", "-H", "Content-Type: application/json", "--data", JSON.generate(input), uri.to_s])
       return body ? JSON.parse(body) : nil
@@ -522,6 +638,150 @@ module TokenBarCLI
     input["model"] ||= default_model(input["providerID"])
   end
 
+  def attach_config_policy!(input, config)
+    return input unless config
+
+    workspace = offline_workspace(config, input["workspaceID"] || config.dig("workspace", "id"))
+    input["workspaceID"] ||= workspace["id"]
+    input["workspaceName"] = workspace["name"]
+    input["workspacePath"] = workspace["pathHint"]
+    input["workspaceClient"] = workspace["client"]
+    input["dailyBudget"] = workspace["dailyBudget"]
+    input["monthlyBudget"] = workspace["monthlyBudget"]
+    input["maxEstimatedRunCost"] = workspace["maxEstimatedRunCost"]
+    input["allowedProviderIDs"] = workspace["allowedProviderIDs"]
+    input["blockedModels"] = workspace["blockedModels"]
+    input["requireCompanyKey"] = workspace["requireCompanyKey"]
+    input["providerID"] ||= config.dig("providers", "preferred") || workspace["allowedProviderIDs"].first
+    input
+  end
+
+  def validate_usage_input!(input)
+    valid_agents = AGENT_DISPLAY.keys
+    raise Error, "--agent must be one of #{valid_agents.join(", ")}" unless valid_agents.include?(input["agent"])
+    raise Error, "missing provider: pass --provider or set providers.preferred in tokenbar.yml" if blank?(input["providerID"])
+    raise Error, "missing model: pass --model or set TOKENBAR_MODEL" if blank?(input["model"])
+    raise Error, "--cost-usd must be >= 0" if input["costUSD"].to_f.negative?
+    raise Error, "token counts must be >= 0" if %w[inputTokens outputTokens totalTokens requestCount].any? { |key| !input[key].nil? && input[key].to_i.negative? }
+  end
+
+  def provider_from_model_or_agent(model, agent)
+    model = model.to_s.downcase
+    return "anthropic" if model.include?("claude")
+    return "openai" if model.include?("gpt") || model.match?(/\bo[34]\b/)
+    return "anthropic" if agent == "claudeCode"
+    return "openai" if agent == "codex"
+
+    nil
+  end
+
+  def claude_statusline_usage_input(payload)
+    input_tokens = integer_deep_find(payload, %w[input_tokens inputTokens])
+    output_tokens = integer_deep_find(payload, %w[output_tokens outputTokens])
+    cache_creation_tokens = integer_deep_find(payload, %w[cache_creation_input_tokens cacheCreationInputTokens]).to_i
+    cache_read_tokens = integer_deep_find(payload, %w[cache_read_input_tokens cacheReadInputTokens]).to_i
+    explicit_total = integer_deep_find(payload, %w[total_tokens totalTokens tokens_used tokensUsed])
+    computed_total = [input_tokens, output_tokens].compact.sum + cache_creation_tokens + cache_read_tokens
+    current_directory = dig_path(payload, %w[workspace current_dir]) ||
+                        dig_path(payload, %w[workspace currentDirectory]) ||
+                        string_deep_find(payload, %w[current_dir currentDirectory cwd])
+    {
+      "agent" => "claudeCode",
+      "providerID" => "anthropic",
+      "model" => dig_path(payload, %w[model id]) || dig_path(payload, %w[model name]) || string_deep_find(payload, %w[model_id modelId]),
+      "sessionID" => string_deep_find(payload, %w[session_id sessionId]),
+      "source" => "Claude Code statusline",
+      "currentDirectory" => current_directory,
+      "workspacePath" => current_directory,
+      "transcriptPath" => string_deep_find(payload, %w[transcript_path transcriptPath]),
+      "costUSD" => numeric_deep_find(payload, %w[total_cost_usd totalCostUSD cost_usd costUSD]),
+      "inputTokens" => input_tokens,
+      "outputTokens" => output_tokens,
+      "totalTokens" => explicit_total || (computed_total.positive? ? computed_total : nil),
+      "contextWindowSize" => integer_deep_find(payload, %w[context_window_size contextWindowSize]),
+      "requestCount" => integer_deep_find(payload, %w[request_count requestCount]),
+      "occurredAt" => iso8601_deep_find(payload, %w[timestamp occurred_at occurredAt]),
+      "rateLimitUsedPercentage" => numeric_deep_find(payload, %w[used_percentage usedPercentage rate_limit_used_percentage rateLimitUsedPercentage]),
+      "rateLimitResetAt" => iso8601_deep_find(payload, %w[reset_at resetAt rate_limit_reset_at rateLimitResetAt]),
+      "cumulative" => true
+    }
+  end
+
+  def dig_path(value, keys)
+    cursor = value
+    keys.each do |key|
+      return nil unless cursor.is_a?(Hash)
+
+      cursor = cursor[key]
+    end
+    cursor.is_a?(String) && !cursor.empty? ? cursor : nil
+  end
+
+  def string_deep_find(value, keys)
+    found = deep_find(value, keys)
+    return nil if found.nil?
+    return nil if found.is_a?(Hash) || found.is_a?(Array)
+
+    found.to_s.empty? ? nil : found.to_s
+  end
+
+  def numeric_deep_find(value, keys)
+    found = deep_find(value, keys)
+    return nil if found.nil?
+
+    Float(found)
+  rescue ArgumentError, TypeError
+    nil
+  end
+
+  def integer_deep_find(value, keys)
+    found = numeric_deep_find(value, keys)
+    found.nil? ? nil : found.to_i
+  end
+
+  def iso8601_deep_find(value, keys)
+    found = deep_find(value, keys)
+    return nil if found.nil?
+    return Time.at(found).utc.iso8601 if found.is_a?(Numeric)
+
+    string = found.to_s
+    return Time.at(Float(string)).utc.iso8601 if string.match?(/\A\d+(\.\d+)?\z/)
+
+    Time.parse(string).utc.iso8601
+  rescue ArgumentError
+    nil
+  end
+
+  def deep_find(value, keys)
+    if value.is_a?(Hash)
+      keys.each { |key| return value[key] if value.key?(key) }
+      value.each_value do |child|
+        found = deep_find(child, keys)
+        return found unless found.nil?
+      end
+    elsif value.is_a?(Array)
+      value.each do |child|
+        found = deep_find(child, keys)
+        return found unless found.nil?
+      end
+    end
+    nil
+  end
+
+  def compact_hash(value)
+    case value
+    when Hash
+      value.each_with_object({}) do |(key, item), memo|
+        compacted = compact_hash(item)
+        memo[key] = compacted unless compacted.nil?
+      end
+    when Array
+      value.map { |item| compact_hash(item) }.compact
+    else
+      value
+    end
+  end
+
   def validate_check_input!(input)
     valid_agents = AGENT_DISPLAY.keys
     raise Error, "--agent must be one of #{valid_agents.join(", ")}" unless valid_agents.include?(input["agent"])
@@ -695,6 +955,34 @@ module TokenBarCLI
     puts decision["recommendation"]
   end
 
+  def print_usage_ingest(response)
+    usage = response.fetch("usage")
+    decision = response.fetch("decision")
+    puts "Ingested #{usage["dataSource"]} usage for #{usage["provider"]}"
+    puts "Workspace: #{usage["workspaceID"] || "current app workspace"}"
+    puts "Delta: $#{format_money(usage["costDelta"].to_f)} · #{usage["tokenDelta"].to_i} tokens"
+    puts "Current policy: #{decision["status"].to_s.upcase} #{decision.dig("workspace", "name") || "Workspace"}"
+  end
+
+  def print_claude_statusline(response)
+    usage = response.fetch("usage")
+    decision = response.fetch("decision")
+    workspace = decision.dig("workspace", "name") || usage["workspaceID"] || "Workspace"
+    pieces = [
+      "TokenBar #{decision["status"].to_s.upcase}",
+      workspace,
+      "$#{format_money(usage["costDelta"].to_f)}",
+      "+#{usage["tokenDelta"].to_i}t"
+    ]
+    if usage["rateLimitUsedPercentage"]
+      pieces << "#{usage["rateLimitUsedPercentage"].to_i}% limit"
+    elsif usage["contextWindowSize"] && usage["contextWindowSize"].to_f.positive?
+      ratio = usage["contextTokenTotal"].to_f / usage["contextWindowSize"].to_f
+      pieces << "#{(ratio * 100).round}% ctx"
+    end
+    puts pieces.join(" · ")
+  end
+
   def print_policy_init(payload)
     puts "Created TokenBar policy:"
     puts "- #{payload["policy"]}"
@@ -711,6 +999,10 @@ module TokenBarCLI
     Array(smoke["reasons"]).each { |reason| puts "- #{reason}" }
     puts
     puts "Next: run tokenbar check --agent codex --provider #{load_config(payload["policy"]).dig("providers", "preferred")} --model #{default_model(load_config(payload["policy"]).dig("providers", "preferred"))}"
+  end
+
+  def format_money(value)
+    format("%.2f", value)
   end
 
   def numeric_env(name, fallback)

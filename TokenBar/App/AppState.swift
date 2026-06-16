@@ -121,6 +121,7 @@ final class AppState: ObservableObject {
 
     private let preferencesStore = AppPreferencesStore()
     private let providerStore = ProviderUsageStore()
+    private let localAgentUsageLedgerStore = LocalAgentUsageLedgerStore()
     private let openAIUsageService = OpenAIUsageService()
     private let anthropicUsageService = AnthropicUsageService()
     private let openRouterCreditsService = OpenRouterCreditsService()
@@ -183,7 +184,7 @@ final class AppState: ObservableObject {
     }
 
     var liveProviderCount: Int {
-        providers.filter(\.isLive).count
+        providers.filter(\.isUsageConnected).count
     }
 
     var unsupportedProviderCount: Int {
@@ -431,6 +432,28 @@ final class AppState: ObservableObject {
         let decision = evaluatePolicy(input: input)
         currentDecision = decision
         return LocalAPIPayloadBuilder.policyDecisionJSON(decision)
+    }
+
+    func ingestLocalAgentUsageJSON(input: LocalAgentUsageIngest) -> Data {
+        let snapshot = applyLocalAgentUsage(input)
+        let policyInput = PolicyEvaluationInput(
+            agent: snapshot.agent,
+            workspaceID: snapshot.workspaceID ?? selectedWorkspaceID,
+            providerID: snapshot.providerID,
+            model: snapshot.model,
+            estimatedCost: snapshot.costDelta,
+            estimatedTokens: Int(snapshot.tokenDelta),
+            intent: "local_usage_ingest"
+        )
+        currentDecision = evaluatePolicy(input: policyInput, shouldRecord: false)
+        return LocalAPIPayloadBuilder.localAgentUsageJSON(snapshot: snapshot, decision: currentDecision)
+    }
+
+    func ingestClaudeStatuslineJSON(data: Data) -> Data {
+        guard let input = Self.claudeStatuslineInput(from: data) else {
+            return Data(#"{"error":"invalid_claude_statusline_input"}"#.utf8)
+        }
+        return ingestLocalAgentUsageJSON(input: input)
     }
 
     func mcpSnapshotJSON(filteredProviderID: String? = nil) -> Data {
@@ -715,6 +738,305 @@ final class AppState: ObservableObject {
             dataSource: .liveUnavailable,
             sourceDetail: "OpenRouter live credits require OPENROUTER_API_KEY in Keychain or the app environment."
         ), at: min(providers.count, 2))
+    }
+
+    private func applyLocalAgentUsage(_ input: LocalAgentUsageIngest) -> LocalAgentUsageAppliedSnapshot {
+        let now = input.occurredAt ?? .now
+        let providerID = normalizedProviderID(input.providerID, model: input.model, agent: input.agent)
+        let agent = input.agent ?? defaultAgent(providerID: providerID)
+        let model = normalizedModel(input.model, providerID: providerID)
+        let workspaceID = upsertWorkspacePolicy(from: input, providerID: providerID)
+        ensureProviderExists(providerID: providerID)
+
+        let contextTokenTotal = Double(input.totalTokens ?? ((input.inputTokens ?? 0) + (input.outputTokens ?? 0)))
+        let cumulativeCost = max(input.costUSD ?? 0, 0)
+        let cumulativeRequests = max(input.requestCount ?? 0, 0)
+        let sessionKey = localUsageSessionKey(input: input, agent: agent, providerID: providerID, model: model, workspaceID: workspaceID)
+        let isCumulative = input.cumulative ?? true
+        let delta = isCumulative
+            ? localAgentUsageLedgerStore.apply(
+                sessionKey: sessionKey,
+                cumulativeCost: cumulativeCost,
+                cumulativeTokens: contextTokenTotal,
+                cumulativeRequestCount: cumulativeRequests,
+                now: now
+            )
+            : LocalAgentUsageDelta(costUSD: cumulativeCost, tokens: contextTokenTotal, requestCount: cumulativeRequests)
+        let detail = localUsageSourceDetail(input: input, providerID: providerID, costDelta: delta.costUSD, tokenDelta: delta.tokens)
+        let snapshot = LocalAgentUsageAppliedSnapshot(
+            agent: agent,
+            providerID: providerID,
+            model: model,
+            workspaceID: workspaceID,
+            sessionKey: sessionKey,
+            sourceName: input.source ?? "local_agent",
+            costDelta: delta.costUSD,
+            tokenDelta: delta.tokens,
+            requestDelta: delta.requestCount,
+            contextTokenTotal: contextTokenTotal,
+            contextWindowSize: input.contextWindowSize.map(Double.init),
+            rateLimitUsedPercentage: input.rateLimitUsedPercentage,
+            rateLimitResetAt: input.rateLimitResetAt,
+            occurredAt: now,
+            sourceDetail: detail
+        )
+
+        if let providerIndex = providers.firstIndex(where: { $0.id == providerID }) {
+            providers[providerIndex].apply(localUsage: snapshot)
+        }
+        if let workspaceID, let workspaceIndex = workspacePolicies.firstIndex(where: { $0.id == workspaceID }) {
+            workspacePolicies[workspaceIndex].spendToday += delta.costUSD
+            workspacePolicies[workspaceIndex].spendMonth += delta.costUSD
+        }
+        addAudit(
+            provider: agent.displayName,
+            action: "usage.local",
+            detail: "\(model) · \(providerID) · +$\(formatMoney(delta.costUSD)) · +\(Int(delta.tokens)) tokens"
+        )
+        persistProviders()
+        notifyStatusBarUpdate()
+        return snapshot
+    }
+
+    private func upsertWorkspacePolicy(from input: LocalAgentUsageIngest, providerID: String) -> String? {
+        let workspaceID = input.workspaceID ?? workspaceIDMatching(path: input.currentDirectory ?? input.workspacePath)
+        guard let workspaceID, workspaceID.isEmpty == false else { return selectedWorkspaceID }
+
+        if let index = workspacePolicies.firstIndex(where: { $0.id == workspaceID }) {
+            workspacePolicies[index].name = input.workspaceName ?? workspacePolicies[index].name
+            workspacePolicies[index].pathHint = input.workspacePath ?? input.currentDirectory ?? workspacePolicies[index].pathHint
+            workspacePolicies[index].client = input.workspaceClient ?? workspacePolicies[index].client
+            workspacePolicies[index].dailyBudget = input.dailyBudget ?? workspacePolicies[index].dailyBudget
+            workspacePolicies[index].monthlyBudget = input.monthlyBudget ?? workspacePolicies[index].monthlyBudget
+            workspacePolicies[index].maxEstimatedRunCost = input.maxEstimatedRunCost ?? workspacePolicies[index].maxEstimatedRunCost
+            workspacePolicies[index].allowedProviderIDs = input.allowedProviderIDs ?? workspacePolicies[index].allowedProviderIDs
+            workspacePolicies[index].blockedModels = input.blockedModels ?? workspacePolicies[index].blockedModels
+            workspacePolicies[index].requireCompanyKey = input.requireCompanyKey ?? workspacePolicies[index].requireCompanyKey
+        } else {
+            var allowedProviderIDs = ["anthropic", "openai", "openrouter"]
+            if allowedProviderIDs.contains(providerID) == false {
+                allowedProviderIDs.append(providerID)
+            }
+            workspacePolicies.append(WorkspacePolicy(
+                id: workspaceID,
+                name: input.workspaceName ?? titleFromWorkspaceID(workspaceID),
+                pathHint: input.workspacePath ?? input.currentDirectory ?? "~",
+                client: input.workspaceClient ?? "local",
+                dailyBudget: input.dailyBudget ?? 8,
+                monthlyBudget: input.monthlyBudget ?? 160,
+                spendToday: 0,
+                spendMonth: 0,
+                allowedProviderIDs: input.allowedProviderIDs ?? allowedProviderIDs,
+                blockedModels: input.blockedModels ?? [],
+                maxEstimatedRunCost: input.maxEstimatedRunCost ?? 1.5,
+                requireCompanyKey: input.requireCompanyKey ?? false
+            ))
+        }
+
+        return workspaceID
+    }
+
+    private func ensureProviderExists(providerID: String) {
+        guard providers.contains(where: { $0.id == providerID }) == false else { return }
+        switch providerID {
+        case "openai":
+            ensureOpenAIProviderExists()
+        case "anthropic":
+            ensureAnthropicProviderExists()
+        case "openrouter":
+            ensureOpenRouterProviderExists()
+        default:
+            providers.append(AppSeedData.provider(
+                id: providerID,
+                name: titleFromWorkspaceID(providerID),
+                category: "AI & API",
+                symbol: "network",
+                current: 0,
+                limit: 0,
+                unit: "tokens",
+                spendToday: 0,
+                spendMonth: 0,
+                resetHours: 24 * 30,
+                dataSource: .localAgent,
+                sourceDetail: "Local agent usage was ingested through TokenBar's local API."
+            ))
+        }
+    }
+
+    private func normalizedProviderID(_ providerID: String?, model: String?, agent: AgentProvider?) -> String {
+        let provider = providerID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if let provider, provider.isEmpty == false { return provider }
+        let model = model?.lowercased() ?? ""
+        if model.contains("claude") { return "anthropic" }
+        if model.contains("gpt") || model.contains("o3") || model.contains("o4") { return "openai" }
+        switch agent {
+        case .claudeCode:
+            return "anthropic"
+        case .codex:
+            return "openai"
+        default:
+            return selectedProviderID
+        }
+    }
+
+    private func defaultAgent(providerID: String) -> AgentProvider {
+        providerID == "anthropic" ? .claudeCode : .custom
+    }
+
+    private func normalizedModel(_ model: String?, providerID: String) -> String {
+        let value = model?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if value.isEmpty == false { return value }
+        return providerID == "anthropic" ? "claude-sonnet" : "unspecified"
+    }
+
+    private func localUsageSessionKey(input: LocalAgentUsageIngest, agent: AgentProvider, providerID: String, model: String, workspaceID: String?) -> String {
+        if let sessionID = input.sessionID, sessionID.isEmpty == false { return sessionID }
+        if let transcriptPath = input.transcriptPath, transcriptPath.isEmpty == false { return transcriptPath }
+        return [agent.rawValue, providerID, model, workspaceID ?? "workspace", input.currentDirectory ?? ""].joined(separator: "|")
+    }
+
+    private func workspaceIDMatching(path: String?) -> String? {
+        guard let path, path.isEmpty == false else { return nil }
+        let expanded = NSString(string: path).expandingTildeInPath
+        return workspacePolicies.first { policy in
+            let policyPath = NSString(string: policy.pathHint).expandingTildeInPath
+            return expanded.hasPrefix(policyPath) || policyPath.hasPrefix(expanded)
+        }?.id
+    }
+
+    private func titleFromWorkspaceID(_ value: String) -> String {
+        let words = value.replacingOccurrences(of: "_", with: "-").split(separator: "-")
+        guard words.isEmpty == false else { return "Workspace" }
+        return words.map { word in
+            word.prefix(1).uppercased() + word.dropFirst()
+        }.joined(separator: " ")
+    }
+
+    private func localUsageSourceDetail(input: LocalAgentUsageIngest, providerID: String, costDelta: Double, tokenDelta: Double) -> String {
+        let source = input.source ?? "local agent"
+        var parts = ["\(source) usage ingested locally for \(providerID)."]
+        if input.contextWindowSize != nil {
+            parts.append("Context tokens are from the local session; provider billing still belongs to the provider console.")
+        } else {
+            parts.append("Token and cost totals are local agent data, not a provider-admin usage API.")
+        }
+        parts.append("Applied +$\(formatMoney(costDelta)) and +\(Int(tokenDelta)) tokens after session de-duplication.")
+        if let rateLimitUsedPercentage = input.rateLimitUsedPercentage {
+            parts.append("Reported rate-limit use: \(Int(rateLimitUsedPercentage))%.")
+        }
+        return parts.joined(separator: " ")
+    }
+
+    private static func claudeStatuslineInput(from data: Data) -> LocalAgentUsageIngest? {
+        guard let object = try? JSONSerialization.jsonObject(with: data) else { return nil }
+        let model = nestedString(object, path: ["model", "id"])
+            ?? nestedString(object, path: ["model", "name"])
+            ?? stringValue(forAnyKey: ["model_id", "modelId", "model"], in: object)
+        let inputTokens = intValue(forAnyKey: ["input_tokens", "inputTokens"], in: object)
+        let outputTokens = intValue(forAnyKey: ["output_tokens", "outputTokens"], in: object)
+        let cacheCreationTokens = intValue(forAnyKey: ["cache_creation_input_tokens", "cacheCreationInputTokens"], in: object) ?? 0
+        let cacheReadTokens = intValue(forAnyKey: ["cache_read_input_tokens", "cacheReadInputTokens"], in: object) ?? 0
+        let explicitTotalTokens = intValue(forAnyKey: ["total_tokens", "totalTokens", "tokens_used", "tokensUsed"], in: object)
+        let computedTotalTokens = [inputTokens, outputTokens].compactMap { $0 }.reduce(0, +) + cacheCreationTokens + cacheReadTokens
+        let totalTokens = explicitTotalTokens ?? (computedTotalTokens > 0 ? computedTotalTokens : nil)
+        let sessionID = stringValue(forAnyKey: ["session_id", "sessionId"], in: object)
+        let transcriptPath = stringValue(forAnyKey: ["transcript_path", "transcriptPath"], in: object)
+        let currentDirectory = nestedString(object, path: ["workspace", "current_dir"])
+            ?? nestedString(object, path: ["workspace", "currentDirectory"])
+            ?? stringValue(forAnyKey: ["current_dir", "currentDirectory", "cwd"], in: object)
+
+        return LocalAgentUsageIngest(
+            agent: .claudeCode,
+            providerID: "anthropic",
+            model: model,
+            workspaceID: nil,
+            workspaceName: nil,
+            workspacePath: currentDirectory,
+            workspaceClient: nil,
+            dailyBudget: nil,
+            monthlyBudget: nil,
+            maxEstimatedRunCost: nil,
+            allowedProviderIDs: nil,
+            blockedModels: nil,
+            requireCompanyKey: nil,
+            sessionID: sessionID,
+            source: "Claude Code statusline",
+            currentDirectory: currentDirectory,
+            transcriptPath: transcriptPath,
+            costUSD: doubleValue(forAnyKey: ["total_cost_usd", "totalCostUSD", "cost_usd", "costUSD"], in: object),
+            inputTokens: inputTokens,
+            outputTokens: outputTokens,
+            totalTokens: totalTokens,
+            contextWindowSize: intValue(forAnyKey: ["context_window_size", "contextWindowSize"], in: object),
+            requestCount: intValue(forAnyKey: ["request_count", "requestCount"], in: object),
+            occurredAt: dateValue(forAnyKey: ["timestamp", "occurred_at", "occurredAt"], in: object),
+            rateLimitUsedPercentage: doubleValue(forAnyKey: ["used_percentage", "usedPercentage", "rate_limit_used_percentage", "rateLimitUsedPercentage"], in: object),
+            rateLimitResetAt: dateValue(forAnyKey: ["reset_at", "resetAt", "rate_limit_reset_at", "rateLimitResetAt"], in: object),
+            cumulative: true
+        )
+    }
+
+    private static func nestedString(_ object: Any, path: [String]) -> String? {
+        var cursor = object
+        for key in path {
+            guard let dictionary = cursor as? [String: Any], let next = dictionary[key] else { return nil }
+            cursor = next
+        }
+        return cursor as? String
+    }
+
+    private static func stringValue(forAnyKey keys: [String], in object: Any) -> String? {
+        guard let value = firstValue(forAnyKey: keys, in: object) else { return nil }
+        if let string = value as? String { return string.isEmpty ? nil : string }
+        return "\(value)"
+    }
+
+    private static func intValue(forAnyKey keys: [String], in object: Any) -> Int? {
+        guard let value = firstValue(forAnyKey: keys, in: object) else { return nil }
+        if let int = value as? Int { return int }
+        if let double = value as? Double { return Int(double) }
+        if let string = value as? String { return Int(string) }
+        return nil
+    }
+
+    private static func doubleValue(forAnyKey keys: [String], in object: Any) -> Double? {
+        guard let value = firstValue(forAnyKey: keys, in: object) else { return nil }
+        if let double = value as? Double { return double }
+        if let int = value as? Int { return Double(int) }
+        if let string = value as? String { return Double(string) }
+        return nil
+    }
+
+    private static func dateValue(forAnyKey keys: [String], in object: Any) -> Date? {
+        guard let value = firstValue(forAnyKey: keys, in: object) else { return nil }
+        if let date = value as? Date { return date }
+        if let seconds = value as? TimeInterval { return Date(timeIntervalSince1970: seconds) }
+        guard let string = value as? String else { return nil }
+        if let date = ISO8601DateFormatter().date(from: string) { return date }
+        if let seconds = TimeInterval(string) { return Date(timeIntervalSince1970: seconds) }
+        return nil
+    }
+
+    private static func firstValue(forAnyKey keys: [String], in object: Any) -> Any? {
+        if let dictionary = object as? [String: Any] {
+            for key in keys {
+                if let value = dictionary[key] {
+                    return value
+                }
+            }
+            for value in dictionary.values {
+                if let found = firstValue(forAnyKey: keys, in: value) {
+                    return found
+                }
+            }
+        } else if let array = object as? [Any] {
+            for value in array {
+                if let found = firstValue(forAnyKey: keys, in: value) {
+                    return found
+                }
+            }
+        }
+        return nil
     }
 
     private func usageSummary(id: String, title: String, multiplier: Double, requestDivisor: Double) -> UsageSummary {
