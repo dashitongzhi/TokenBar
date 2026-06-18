@@ -70,6 +70,23 @@ tokenbar usage claude-statusline
 
 Claude Code passes statusline JSON on stdin. TokenBar extracts the local session id, transcript path, model, cost, token, context-window, and rate-limit fields it recognizes, applies the same de-duplication ledger, and prints a compact statusline string unless `--json` is supplied.
 
+Codex local usage ingestion is available through Codex transcript JSONL files:
+
+```bash
+tokenbar usage codex-session --transcript ~/.codex/sessions/2026/06/17/rollout-example.jsonl
+```
+
+The Codex bridge reads the latest local `token_count` event, extracts cumulative session tokens, model, context window, cwd, and session id, estimates cumulative spend from model pricing, and posts the same `POST /usage/ingest` payload as other local agents. The app-side ledger applies only the delta since the last ingest for that session, so repeated Stop-hook calls do not double count. Pricing can be overridden with `TOKENBAR_CODEX_INPUT_USD_PER_1M`, `TOKENBAR_CODEX_CACHED_INPUT_USD_PER_1M`, and `TOKENBAR_CODEX_OUTPUT_USD_PER_1M`, or with a project config block:
+
+```yaml
+codex:
+  pricing:
+    gpt-5.5:
+      input_per_million: 1.25
+      cached_input_per_million: 0.125
+      output_per_million: 10.00
+```
+
 Use `tokenbar policy init` from a repo root to scaffold a project-local policy:
 
 ```bash
@@ -86,7 +103,7 @@ tokenbar policy init --codex-hooks
 tokenbar policy init --claude-hooks
 ```
 
-Hook init writes `.codex/hooks.json` and/or `.claude/settings.local.json` using the working shell scripts in `examples/hooks/`. Existing files are left untouched unless you pass `--force`, so merge manually when a project already has hooks.
+Hook init writes `.codex/hooks.json` and/or `.claude/settings.local.json` using the working shell scripts in `examples/hooks/`. Existing files are left untouched unless you pass `--force`, so merge manually when a project already has hooks. The generated Codex config includes both the `UserPromptSubmit` policy preflight and a `Stop` hook that sends local Codex transcript usage into TokenBar.
 
 ### `tokenbar.yml`
 
@@ -192,7 +209,7 @@ Direct Claude Code statusline JSON can also be posted to `POST /usage/claude-sta
 
 Working hook examples live in `examples/hooks/`.
 
-For the fastest setup, run `tokenbar policy init --codex-hooks` or `tokenbar policy init --hooks all` from the target repo. To wire it manually, copy or adapt `examples/hooks/codex-hooks.json` into `.codex/hooks.json`. Codex discovers project hooks from `.codex/hooks.json` or inline `.codex/config.toml` hook tables, and `UserPromptSubmit` hooks receive the prompt and model on stdin. See the [Codex hooks docs](https://developers.openai.com/codex/hooks).
+For the fastest setup, run `tokenbar policy init --codex-hooks` or `tokenbar policy init --hooks all` from the target repo. To wire it manually, copy or adapt `examples/hooks/codex-hooks.json` into `.codex/hooks.json`. Codex discovers project hooks from `.codex/hooks.json` or inline `.codex/config.toml` hook tables. The TokenBar example uses `UserPromptSubmit` for preflight policy and `Stop` for transcript-backed usage ingestion. See the [Codex hooks docs](https://developers.openai.com/codex/hooks).
 
 For Claude Code, run `tokenbar policy init --claude-hooks` or merge `examples/hooks/claude-settings.example.json` into `.claude/settings.json` or `.claude/settings.local.json`. Claude Code `UserPromptSubmit` hooks can return a top-level `decision: "block"` with a `reason`, which the TokenBar example emits when `tokenbar check` returns `2`. See the [Claude Code hooks docs](https://docs.anthropic.com/en/docs/claude-code/hooks).
 
@@ -205,6 +222,12 @@ TOKENBAR_MODEL=claude-sonnet
 TOKENBAR_ESTIMATED_COST=0.25
 TOKENBAR_ESTIMATED_TOKENS=20000
 TOKENBAR_INTENT=refactor
+```
+
+For Codex usage ingestion, keep the generated `Stop` hook or run the helper directly with Codex hook JSON on stdin:
+
+```bash
+TOKENBAR_BIN=/absolute/path/to/tokenbar examples/hooks/codex-tokenbar-stop.sh
 ```
 
 For Claude Code statusline ingestion, merge the `statusLine` block from `examples/hooks/claude-settings.example.json` or run the helper directly:
@@ -226,7 +249,7 @@ Keys can be saved from Settings into the macOS Keychain, or supplied through the
 Provider source badges are deliberately literal:
 
 - `Live`: TokenBar fetched provider data successfully.
-- `Local`: TokenBar ingested local agent usage, such as Claude Code statusline data. This is useful for provider cards and guard decisions, but it is not a provider-admin billing API.
+- `Local`: TokenBar ingested local agent usage, such as Claude Code statusline data or Codex transcript token counts. This is useful for provider cards and guard decisions, but it is not a provider-admin billing API.
 - `Needs key`: the provider has a live adapter, but no usable admin key is available.
 - `Error`: the live adapter ran and the provider returned an error or unreadable response.
 - `Unsupported`: TokenBar has metadata for the provider, but no live adapter yet.
@@ -256,6 +279,7 @@ Run the CLI smoke checks:
 ```bash
 ./bin/tokenbar status
 ./bin/tokenbar usage ingest --agent claudeCode --provider anthropic --model claude-sonnet --session-id smoke --cost-usd 0.12 --total-tokens 24000 --json
+./bin/tokenbar usage codex-session --transcript /path/to/codex-rollout.jsonl --json
 ./bin/tokenbar check --agent codex --provider anthropic --model claude-sonnet --estimated-cost 0.20 --estimated-tokens 12000 --intent debug
 ./bin/tokenbar check --agent claudeCode --provider anthropic --model claude-opus --estimated-cost 2.40 --estimated-tokens 180000 --intent refactor
 ```
@@ -281,12 +305,12 @@ This is a releaseable early product shell:
 - Menu bar decision popover
 - Local API for agent preflight checks
 - CLI preflight with `tokenbar status`, `tokenbar check`, `tokenbar policy init`, upward `tokenbar.yml` lookup, and offline policy fallback
-- Working Codex and Claude Code `UserPromptSubmit` hook examples
-- Claude Code statusline/local usage ingestion with session de-duplication and app workspace policy upsert
+- Working Codex and Claude Code hook examples
+- Claude Code statusline and Codex transcript local usage ingestion with session de-duplication and app workspace policy upsert
 - OpenAI organization usage and cost adapter with Keychain-backed admin key storage
 - Anthropic Usage and Cost Admin API adapter with matching Keychain-backed admin key storage
 - OpenRouter Credits API adapter with matching Keychain-backed API key storage
 - Provider source badges that distinguish live data, missing credentials, adapter errors, and unsupported providers
 - API monitor catalog retained as an integration surface
 
-The next production step is adding more real adapters, such as Codex local usage records or provider-specific rate-limit headers.
+The next production step is adding more real adapters, such as provider-specific rate-limit headers and additional admin usage APIs.

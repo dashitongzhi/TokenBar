@@ -22,6 +22,12 @@ module TokenBarCLI
     "continueDev" => "Continue",
     "custom" => "Custom Agent"
   }.freeze
+  DEFAULT_CODEX_PRICING = [
+    [/gpt-5\.5|gpt-5/i, { input: 1.25, cached_input: 0.125, output: 10.00 }],
+    [/gpt-4\.1/i, { input: 2.00, cached_input: 0.50, output: 8.00 }],
+    [/o4-mini|o3-mini/i, { input: 1.10, cached_input: 0.275, output: 4.40 }],
+    [/o3/i, { input: 10.00, cached_input: 2.50, output: 40.00 }]
+  ].freeze
 
   class Error < StandardError; end
 
@@ -257,13 +263,15 @@ module TokenBarCLI
 
   def usage(options, argv)
     subcommand = argv.shift
-    raise Error, "missing usage command: use ingest or claude-statusline" unless subcommand
+    raise Error, "missing usage command: use ingest, claude-statusline, or codex-session" unless subcommand
 
     case subcommand
     when "ingest"
       usage_ingest(options, argv)
     when "claude-statusline"
       usage_claude_statusline(options, argv)
+    when "codex-session"
+      usage_codex_session(options, argv)
     else
       raise Error, "unknown usage command: #{subcommand}"
     end
@@ -359,6 +367,45 @@ module TokenBarCLI
     end
   rescue JSON::ParserError => e
     raise Error, "invalid Claude Code statusline JSON: #{e.message}"
+  end
+
+  def usage_codex_session(options, argv)
+    codex_options = {
+      transcript: ENV["TOKENBAR_CODEX_TRANSCRIPT"],
+      session_id: ENV["TOKENBAR_SESSION_ID"],
+      cwd: ENV["TOKENBAR_WORKSPACE_PATH"],
+      model: ENV["TOKENBAR_MODEL"]
+    }
+    output_json = options[:json]
+
+    parser = OptionParser.new do |opts|
+      opts.banner = "Usage: tokenbar usage codex-session [--transcript PATH] [--json]"
+      opts.on("--transcript PATH", "Codex transcript JSONL path") { |value| codex_options[:transcript] = value }
+      opts.on("--session-id ID", "Stable Codex session id") { |value| codex_options[:session_id] = value }
+      opts.on("--cwd PATH", "Workspace path reported by Codex") { |value| codex_options[:cwd] = value }
+      opts.on("--model MODEL", "Codex model id") { |value| codex_options[:model] = value }
+      opts.on("--json", "Print machine-readable JSON") { output_json = true }
+      opts.on("-h", "--help", "Show help") do
+        puts opts
+        exit 0
+      end
+    end
+    parser.parse!(argv)
+
+    hook_payload = read_stdin_json
+    config = load_config(options[:config_path])
+    input = codex_session_usage_input(hook_payload, codex_options, config)
+    attach_config_policy!(input, config)
+    validate_usage_input!(input)
+
+    response = post_local_usage_ingest(options[:api_url], input)
+    raise Error, "TokenBar app is not running; Codex local usage ingestion requires the app API" unless response
+
+    if output_json
+      puts JSON.pretty_generate(response)
+    else
+      print_usage_ingest(response)
+    end
   end
 
   def fetch_api_status(api_url)
@@ -551,6 +598,18 @@ module TokenBarCLI
                   }
                 ]
               }
+            ],
+            "Stop" => [
+              {
+                "hooks" => [
+                  {
+                    "type" => "command",
+                    "command" => "TOKENBAR_BIN=#{root.join("bin/tokenbar").to_s.inspect} #{root.join("examples/hooks/codex-tokenbar-stop.sh").to_s.inspect}",
+                    "timeout" => 10,
+                    "statusMessage" => "Sending Codex usage to TokenBar"
+                  }
+                ]
+              }
             ]
           }
         ) + "\n"
@@ -705,6 +764,148 @@ module TokenBarCLI
       "rateLimitResetAt" => iso8601_deep_find(payload, %w[reset_at resetAt rate_limit_reset_at rateLimitResetAt]),
       "cumulative" => true
     }
+  end
+
+  def codex_session_usage_input(hook_payload, options, config)
+    transcript_path = options[:transcript] ||
+                      string_deep_find(hook_payload, %w[transcript_path transcriptPath transcript_file transcriptFile transcript])
+    transcript = codex_transcript_summary(transcript_path)
+    model = options[:model] ||
+            string_deep_find(hook_payload, %w[model model_id modelId]) ||
+            transcript["model"] ||
+            "gpt-5"
+    usage = transcript.fetch("usage", {})
+    input_tokens = usage["input_tokens"].to_i
+    cached_input_tokens = usage["cached_input_tokens"].to_i
+    output_tokens = usage["output_tokens"].to_i
+    total_tokens = usage["total_tokens"].to_i
+    total_tokens = input_tokens + output_tokens if total_tokens.zero? && (input_tokens + output_tokens).positive?
+    pricing = codex_pricing_for(model, config)
+    cost = numeric_deep_find(hook_payload, %w[cost_usd costUSD total_cost_usd totalCostUSD]) ||
+           numeric_env("TOKENBAR_CODEX_COST_USD", nil) ||
+           estimate_codex_cost(usage, pricing)
+    cwd = options[:cwd] ||
+          string_deep_find(hook_payload, %w[cwd current_dir currentDirectory]) ||
+          transcript["cwd"] ||
+          Dir.pwd
+    session_id = options[:session_id] ||
+                 string_deep_find(hook_payload, %w[session_id sessionId]) ||
+                 transcript["sessionID"] ||
+                 (transcript_path ? File.basename(transcript_path, ".jsonl") : nil)
+
+    {
+      "agent" => "codex",
+      "providerID" => "openai",
+      "model" => model,
+      "sessionID" => session_id,
+      "source" => "Codex local transcript",
+      "currentDirectory" => cwd,
+      "workspacePath" => cwd,
+      "transcriptPath" => transcript_path,
+      "costUSD" => cost,
+      "inputTokens" => input_tokens,
+      "outputTokens" => output_tokens,
+      "totalTokens" => total_tokens,
+      "contextWindowSize" => transcript["contextWindowSize"],
+      "requestCount" => transcript["requestCount"],
+      "occurredAt" => transcript["occurredAt"] || Time.now.utc.iso8601,
+      "cumulative" => true
+    }
+  end
+
+  def codex_transcript_summary(path)
+    raise Error, "missing Codex transcript path; pass --transcript or run from a Codex Stop hook" if blank?(path)
+
+    expanded = Pathname.new(path).expand_path
+    raise Error, "Codex transcript not found: #{expanded}" unless expanded.file?
+
+    summary = { "usage" => {}, "requestCount" => 0, "transcriptPath" => expanded.to_s }
+    File.foreach(expanded) do |line|
+      entry = JSON.parse(line)
+      payload = entry["payload"] || {}
+      case entry["type"]
+      when "session_meta"
+        summary["sessionID"] ||= payload["id"]
+        summary["cwd"] ||= payload["cwd"]
+      when "turn_context"
+        summary["cwd"] = payload["cwd"] if payload["cwd"]
+        summary["model"] = payload["model"] if payload["model"]
+      when "event_msg"
+        next unless payload["type"] == "token_count"
+
+        info = payload["info"] || {}
+        usage = info["total_token_usage"] || {}
+        summary["usage"] = normalize_codex_token_usage(usage)
+        summary["contextWindowSize"] = info["model_context_window"]
+        summary["occurredAt"] = entry["timestamp"]
+        summary["requestCount"] += 1
+      end
+    rescue JSON::ParserError
+      next
+    end
+    raise Error, "Codex transcript has no token_count events: #{expanded}" if summary["usage"].empty?
+
+    summary
+  end
+
+  def normalize_codex_token_usage(usage)
+    {
+      "input_tokens" => usage["input_tokens"].to_i,
+      "cached_input_tokens" => usage["cached_input_tokens"].to_i,
+      "output_tokens" => usage["output_tokens"].to_i,
+      "reasoning_output_tokens" => usage["reasoning_output_tokens"].to_i,
+      "total_tokens" => usage["total_tokens"].to_i
+    }
+  end
+
+  def codex_pricing_for(model, config)
+    config_rate = codex_config_pricing(model, config)
+    env_rate = {
+      input: numeric_env("TOKENBAR_CODEX_INPUT_USD_PER_1M", nil),
+      cached_input: numeric_env("TOKENBAR_CODEX_CACHED_INPUT_USD_PER_1M", nil),
+      output: numeric_env("TOKENBAR_CODEX_OUTPUT_USD_PER_1M", nil)
+    }.compact
+    return config_rate.merge(env_rate) if config_rate
+    return (DEFAULT_CODEX_PRICING.find { |pattern, _rate| model.to_s.match?(pattern) }&.last || {}).merge(env_rate) if env_rate.empty? == false
+
+    DEFAULT_CODEX_PRICING.find { |pattern, _rate| model.to_s.match?(pattern) }&.last ||
+      { input: 0.0, cached_input: 0.0, output: 0.0 }
+  end
+
+  def codex_config_pricing(model, config)
+    pricing = config&.dig("codex", "pricing") || config&.dig("pricing", "codex")
+    return nil unless pricing.is_a?(Hash)
+
+    raw = pricing[model.to_s] || pricing[model.to_s.downcase] || pricing["default"]
+    return nil unless raw.is_a?(Hash)
+
+    {
+      input: numeric_config(raw["input_per_million"] || raw["inputPerMillion"], 0),
+      cached_input: numeric_config(raw["cached_input_per_million"] || raw["cachedInputPerMillion"], 0),
+      output: numeric_config(raw["output_per_million"] || raw["outputPerMillion"], 0)
+    }
+  end
+
+  def estimate_codex_cost(usage, pricing)
+    input_tokens = usage["input_tokens"].to_i
+    cached_input_tokens = [usage["cached_input_tokens"].to_i, input_tokens].min
+    uncached_input_tokens = [input_tokens - cached_input_tokens, 0].max
+    output_tokens = usage["output_tokens"].to_i
+
+    (uncached_input_tokens * pricing[:input].to_f +
+      cached_input_tokens * pricing[:cached_input].to_f +
+      output_tokens * pricing[:output].to_f) / 1_000_000.0
+  end
+
+  def read_stdin_json
+    return {} if STDIN.tty?
+
+    raw = STDIN.read
+    return {} if blank?(raw)
+
+    JSON.parse(raw)
+  rescue JSON::ParserError
+    {}
   end
 
   def dig_path(value, keys)
