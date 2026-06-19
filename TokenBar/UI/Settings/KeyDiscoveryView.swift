@@ -9,6 +9,8 @@ struct KeyDiscoveryView: View {
     @State private var includeHomeEnv = false
     @State private var selectedTargets: [DiscoveryTarget] = []
     @State private var hasScanned = false
+    @State private var importingKeyIDs: Set<String> = []
+    @State private var importMessages: [String: String] = [:]
 
     private var scanTargets: [DiscoveryTarget] {
         let home = FileManager.default.homeDirectoryForCurrentUser
@@ -126,18 +128,43 @@ struct KeyDiscoveryView: View {
                 )
             } else {
                 List(discovered) { key in
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text(key.provider)
-                                .font(.headline)
-                            Spacer()
-                            Text(key.variableName)
-                                .font(.caption.monospaced())
+                    HStack(alignment: .center, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text(key.provider)
+                                    .font(.headline)
+                                Spacer()
+                                Text(key.variableName)
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(.secondary)
+                            }
+                            Text(key.locationSummary)
+                                .font(.caption)
                                 .foregroundStyle(.secondary)
+                            if let message = importMessages[key.id] {
+                                Text(message)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
                         }
-                        Text(key.locationSummary)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+
+                        Spacer(minLength: 8)
+
+                        if canImport(key) {
+                            if importingKeyIDs.contains(key.id) {
+                                ProgressView()
+                                    .controlSize(.small)
+                            } else {
+                                Button {
+                                    importKey(key)
+                                } label: {
+                                    Label(appState.localized("importKey"), systemImage: "square.and.arrow.down")
+                                }
+                                .buttonStyle(.bordered)
+                                .help(importHelp(for: key))
+                            }
+                        }
                     }
                 }
             }
@@ -199,5 +226,78 @@ struct KeyDiscoveryView: View {
             merged.append(target)
         }
         selectedTargets = merged.sorted { $0.sourceLabel < $1.sourceLabel }
+    }
+
+    private func canImport(_ key: DiscoveredKey) -> Bool {
+        importActionName(for: key) != nil
+    }
+
+    private func importHelp(for key: DiscoveredKey) -> String {
+        guard let actionName = importActionName(for: key) else {
+            return appState.localized("keyDiscoveryImportUnsupported")
+        }
+        return String(format: appState.localized("keyDiscoveryImportHelpFormat"), key.variableName, actionName)
+    }
+
+    private func importActionName(for key: DiscoveredKey) -> String? {
+        switch key.provider {
+        case "OpenAI":
+            return "OPENAI_ADMIN_KEY"
+        case "Anthropic":
+            return "ANTHROPIC_ADMIN_KEY"
+        case "OpenRouter":
+            return "OPENROUTER_API_KEY"
+        default:
+            return nil
+        }
+    }
+
+    private func importKey(_ key: DiscoveredKey) {
+        guard importingKeyIDs.contains(key.id) == false else { return }
+        importingKeyIDs.insert(key.id)
+        importMessages[key.id] = appState.localized("keyDiscoveryImporting")
+
+        Task {
+            do {
+                try await store(key)
+                await MainActor.run {
+                    importingKeyIDs.remove(key.id)
+                    importMessages[key.id] = String(
+                        format: appState.localized("keyDiscoveryImportedFormat"),
+                        key.provider,
+                        key.variableName
+                    )
+                }
+            } catch {
+                await MainActor.run {
+                    importingKeyIDs.remove(key.id)
+                    importMessages[key.id] = String(
+                        format: appState.localized("keyDiscoveryImportFailedFormat"),
+                        error.localizedDescription
+                    )
+                }
+            }
+        }
+    }
+
+    private func store(_ key: DiscoveredKey) async throws {
+        switch key.provider {
+        case "OpenAI":
+            try await appState.storeOpenAIAdminKey(key.secretValue)
+        case "Anthropic":
+            try await appState.storeAnthropicAdminKey(key.secretValue)
+        case "OpenRouter":
+            try await appState.storeOpenRouterAPIKey(key.secretValue)
+        default:
+            throw KeyDiscoveryImportError.unsupportedProvider
+        }
+    }
+}
+
+private enum KeyDiscoveryImportError: LocalizedError {
+    case unsupportedProvider
+
+    var errorDescription: String? {
+        "This provider cannot be imported into live settings yet."
     }
 }

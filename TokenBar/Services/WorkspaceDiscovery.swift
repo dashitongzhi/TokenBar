@@ -6,6 +6,7 @@ struct DiscoveredKey: Identifiable, Sendable {
     var variableName: String
     var sourceLabel: String
     var line: Int
+    var secretValue: String
 
     var locationSummary: String {
         "\(sourceLabel), line \(line)"
@@ -45,16 +46,20 @@ actor WorkspaceDiscovery {
                 guard text.trimmingCharacters(in: .whitespaces).hasPrefix("#") == false else { continue }
 
                 for (provider, names) in patterns {
-                    guard let variable = names.first(where: { containsEnvironmentAssignment(named: $0, in: text) }) else { continue }
+                    guard let match = names.compactMap({ variable -> (String, String)? in
+                        guard let value = environmentValue(named: variable, in: text), value.isEmpty == false else { return nil }
+                        return (variable, value)
+                    }).first else { continue }
                     let lineNumber = offset + 1
-                    let keyID = "\(provider)-\(variable)-\(target.sourceLabel)-\(lineNumber)"
+                    let keyID = "\(provider)-\(match.0)-\(target.sourceLabel)-\(lineNumber)"
                     guard seenIDs.insert(keyID).inserted else { continue }
 
                     let key = DiscoveredKey(
                         provider: provider,
-                        variableName: variable,
+                        variableName: match.0,
                         sourceLabel: target.sourceLabel,
-                        line: lineNumber
+                        line: lineNumber,
+                        secretValue: match.1
                     )
                     discovered.append(key)
                 }
@@ -68,11 +73,31 @@ actor WorkspaceDiscovery {
         }
     }
 
-    private func containsEnvironmentAssignment(named variable: String, in line: String) -> Bool {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        return trimmed.hasPrefix("\(variable)=")
-            || trimmed.hasPrefix("\(variable) =")
-            || trimmed.hasPrefix("export \(variable)=")
-            || trimmed.hasPrefix("export \(variable) =")
+    private func environmentValue(named variable: String, in line: String) -> String? {
+        var trimmed = line.trimmingCharacters(in: .whitespaces)
+        if trimmed.hasPrefix("export ") {
+            trimmed.removeFirst("export ".count)
+            trimmed = trimmed.trimmingCharacters(in: .whitespaces)
+        }
+
+        guard trimmed.hasPrefix(variable) else { return nil }
+        var remainder = String(trimmed.dropFirst(variable.count)).trimmingCharacters(in: .whitespaces)
+        guard remainder.hasPrefix("=") else { return nil }
+        remainder.removeFirst()
+        var value = remainder.trimmingCharacters(in: .whitespaces)
+
+        if let quote = value.first, quote == "\"" || quote == "'" {
+            value.removeFirst()
+            if let closingQuote = value.firstIndex(of: quote) {
+                return String(value[..<closingQuote])
+            }
+            return value
+        }
+
+        if let commentStart = value.range(of: " #")?.lowerBound {
+            value = String(value[..<commentStart]).trimmingCharacters(in: .whitespaces)
+        }
+
+        return value
     }
 }
