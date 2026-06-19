@@ -108,8 +108,9 @@ struct ProviderUsageStore {
                 }
             } else if normalized.id == "minimax" {
                 if normalized.dataSource != .ccSwitch {
-                    normalized.unit = normalized.dataSource == .live ? "models" : normalized.unit
-                    normalized.quotaLimitKnown = false
+                    normalized.unit = "percent"
+                    normalized.limit = normalized.limit > 0 ? normalized.limit : 100
+                    normalized.quotaLimitKnown = normalized.dataSource == .live
                     normalized.requestCountKnown = normalized.dataSource == .ccSwitch ? true : false
                     normalized.spendTodayKnown = normalized.dataSource == .ccSwitch
                     normalized.spendMonthKnown = normalized.dataSource == .ccSwitch
@@ -118,7 +119,7 @@ struct ProviderUsageStore {
                     let source = normalized.sourceKind == .error ? UsageDataSource.error : UsageDataSource.liveUnavailable
                     let detail = normalized.sourceKind == .error && normalized.sourceDescription.isEmpty == false
                         ? normalized.sourceDescription
-                        : "MiniMax access verification uses the built-in Anthropic-compatible base URL https://api.minimaxi.com/anthropic and requires MINIMAX_API_KEY in Keychain or the app environment."
+                        : "MiniMax Token Plan quota requires MINIMAX_API_KEY in Keychain or the app environment."
                     normalized.markSource(source, detail: detail, clearUsage: true)
                 }
             } else if normalized.id == "deepseek" {

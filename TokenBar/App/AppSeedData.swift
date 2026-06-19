@@ -66,12 +66,12 @@ enum AppSeedData {
                 symbol: "bolt.horizontal.circle.fill",
                 current: 0,
                 limit: 0,
-                unit: "models",
+                unit: "percent",
                 spendToday: 0,
                 spendMonth: 0,
                 resetHours: 24 * 30,
                 dataSource: .liveUnavailable,
-                sourceDetail: "MiniMax access verification uses the built-in Anthropic-compatible base URL https://api.minimaxi.com/anthropic and requires MINIMAX_API_KEY in Keychain or the app environment."
+                sourceDetail: "MiniMax Token Plan quota requires MINIMAX_API_KEY in Keychain or the app environment."
             ),
             provider(
                 id: "deepseek",

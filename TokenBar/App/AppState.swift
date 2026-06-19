@@ -392,7 +392,7 @@ final class AppState: ObservableObject {
         if let index = providers.firstIndex(where: { $0.id == "minimax" }) {
             providers[index].markSource(
                 .liveUnavailable,
-                detail: "MiniMax access verification uses the built-in Anthropic-compatible base URL https://api.minimaxi.com/anthropic and requires MINIMAX_API_KEY in Keychain or the app environment.",
+                detail: "MiniMax Token Plan quota requires MINIMAX_API_KEY in Keychain or the app environment.",
                 clearUsage: true
             )
         }
@@ -752,20 +752,20 @@ final class AppState: ObservableObject {
             if providers[index].sourceKind != .ccSwitch {
                 providers[index].apply(snapshot: snapshot)
             } else {
-                providers[index].sourceDetail = "\(providers[index].sourceDescription) MiniMax API verification also succeeded with \(snapshot.modelCount) visible models at \(MiniMaxUsageSnapshot.anthropicBaseURL)."
+                providers[index].sourceDetail = "\(providers[index].sourceDescription) MiniMax Token Plan quota also refreshed: current \(snapshot.intervalWindowLabel) \(Int(snapshot.intervalUsedPercent))% used, weekly \(snapshot.weeklyWindowLabel) \(Int(snapshot.weeklyUsedPercent))% used."
                 providers[index].sourceUpdatedAt = snapshot.fetchedAt
             }
-            addAudit(provider: "MiniMax", action: "access.live", detail: "Verified MiniMax access with \(snapshot.modelCount) visible models")
+            addAudit(provider: "MiniMax", action: "quota.live", detail: "Fetched MiniMax Token Plan quota: current \(Int(snapshot.intervalUsedPercent))%, weekly \(Int(snapshot.weeklyUsedPercent))%")
         case .unavailable(let detail):
             if providers[index].sourceKind != .ccSwitch {
                 providers[index].markSource(.liveUnavailable, detail: detail, clearUsage: true)
             }
-            addAudit(provider: "MiniMax", action: "access.needs_key", detail: "MiniMax access refresh skipped because no API key is available")
+            addAudit(provider: "MiniMax", action: "quota.needs_key", detail: "MiniMax quota refresh skipped because no API key is available")
         case .failure(let detail):
             if providers[index].sourceKind != .ccSwitch {
                 providers[index].markSource(.error, detail: detail)
             }
-            addAudit(provider: "MiniMax", action: "access.error", detail: detail)
+            addAudit(provider: "MiniMax", action: "quota.error", detail: detail)
         }
     }
 
@@ -870,12 +870,12 @@ final class AppState: ObservableObject {
             symbol: "bolt.horizontal.circle.fill",
             current: 0,
             limit: 0,
-            unit: "models",
+            unit: "percent",
             spendToday: 0,
             spendMonth: 0,
             resetHours: 24 * 30,
             dataSource: .liveUnavailable,
-            sourceDetail: "MiniMax access verification uses the built-in Anthropic-compatible base URL https://api.minimaxi.com/anthropic and requires MINIMAX_API_KEY in Keychain or the app environment."
+            sourceDetail: "MiniMax Token Plan quota requires MINIMAX_API_KEY in Keychain or the app environment."
         ), at: min(providers.count, 4))
     }
 

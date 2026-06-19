@@ -381,26 +381,48 @@ struct ProviderUsage: Identifiable, Codable, Equatable {
     }
 
     mutating func apply(snapshot: MiniMaxUsageSnapshot) {
-        current = Double(snapshot.modelCount)
-        limit = 0
-        unit = "models"
+        current = snapshot.intervalUsedPercent
+        limit = 100
+        unit = "percent"
         tokensToday = tokensToday ?? 0
         requestCountToday = requestCountToday ?? 0
         requestCountMonth = requestCountMonth ?? 0
         currencyCode = "USD"
-        quotaLimitKnown = false
+        quotaLimitKnown = true
         requestCountKnown = false
         spendTodayKnown = false
         spendMonthKnown = false
         spendToday = 0
         spendMonth = 0
-        resetAt = snapshot.fetchedAt.addingTimeInterval(24 * 3600)
+        resetAt = snapshot.intervalResetAt
         lastUpdated = snapshot.fetchedAt
-        history = [UsagePoint(timestamp: snapshot.fetchedAt, value: Double(snapshot.modelCount))]
+        history = snapshot.history
         dataSource = .live
         sourceUpdatedAt = snapshot.fetchedAt
-        let models = snapshot.sampleModels.isEmpty ? "no model IDs returned" : snapshot.sampleModels.joined(separator: ", ")
-        sourceDetail = "MiniMax Anthropic-compatible API is reachable at \(MiniMaxUsageSnapshot.anthropicBaseURL). \(snapshot.modelCount) models visible: \(models). Usage and token-plan quotas are not exposed by this model-list endpoint."
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .short
+        let intervalReset = formatter.localizedString(for: snapshot.intervalResetAt, relativeTo: snapshot.fetchedAt)
+        let weeklyReset = formatter.localizedString(for: snapshot.weeklyResetAt, relativeTo: snapshot.fetchedAt)
+        var detail = "MiniMax Token Plan quota from \(MiniMaxUsageSnapshot.tokenPlanURL). \(snapshot.primaryModelName) current \(snapshot.intervalWindowLabel) is \(Int(snapshot.intervalUsedPercent))% used"
+        if snapshot.intervalTotalCount > 0 {
+            detail += " (\(Int(snapshot.intervalUsedCount))/\(Int(snapshot.intervalTotalCount)))"
+        } else if let remaining = snapshot.intervalRemainingPercent {
+            detail += " (\(Int(remaining))% remaining)"
+        }
+        detail += " and resets \(intervalReset). Weekly \(snapshot.weeklyWindowLabel) is \(Int(snapshot.weeklyUsedPercent))% used"
+        if snapshot.weeklyTotalCount > 0 {
+            detail += " (\(Int(snapshot.weeklyUsedCount))/\(Int(snapshot.weeklyTotalCount)))"
+        } else if let remaining = snapshot.weeklyRemainingPercent {
+            detail += " (\(Int(remaining))% remaining)"
+        }
+        detail += " and resets \(weeklyReset)."
+        if snapshot.modelWindows.count > 1 {
+            let names = snapshot.modelWindows.dropFirst().prefix(3).map(\.modelName).joined(separator: ", ")
+            if names.isEmpty == false {
+                detail += " Additional windows: \(names)."
+            }
+        }
+        sourceDetail = detail
     }
 
     mutating func apply(localUsage: LocalAgentUsageAppliedSnapshot) {
