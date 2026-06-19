@@ -61,6 +61,7 @@ extension UsageDataSource {
         switch self {
         case .live: .green
         case .localAgent: .blue
+        case .ccSwitch: .purple
         case .liveUnavailable: .orange
         case .unsupported: .secondary
         case .error: .red
@@ -71,6 +72,7 @@ extension UsageDataSource {
         switch self {
         case .live: "checkmark.seal.fill"
         case .localAgent: "terminal.fill"
+        case .ccSwitch: "arrow.triangle.branch"
         case .liveUnavailable: "key.slash.fill"
         case .unsupported: "slash.circle"
         case .error: "exclamationmark.triangle.fill"
@@ -81,11 +83,13 @@ extension UsageDataSource {
         switch (self, language) {
         case (.live, .english): "Live"
         case (.localAgent, .english): "Local"
+        case (.ccSwitch, .english): "CC Switch"
         case (.liveUnavailable, .english): "Needs key"
         case (.unsupported, .english): "Unsupported"
         case (.error, .english): "Error"
         case (.live, .chinese): "实时"
         case (.localAgent, .chinese): "本地"
+        case (.ccSwitch, .chinese): "CC Switch"
         case (.liveUnavailable, .chinese): "需要密钥"
         case (.unsupported, .chinese): "未支持"
         case (.error, .chinese): "错误"

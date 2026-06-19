@@ -11,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusBarController = StatusBarController(appState: .shared)
         localAPIServer = .shared
         localAPIServer?.syncWithPreference()
+        AppState.shared.refreshAll()
         timer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { _ in
             Task { @MainActor in
                 AppState.shared.refreshAll()

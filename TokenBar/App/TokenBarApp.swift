@@ -8,6 +8,7 @@ struct TokenBarApp: App {
     init() {
         // Used by script/build_and_run.sh --verify to exercise LocalAPIServer without LaunchServices.
         if CommandLine.arguments.contains("--tokenbar-verify-local-api") {
+            AppState.shared.refreshAll()
             LocalAPIServer.shared.syncWithPreference()
             RunLoop.main.run()
         }

@@ -125,6 +125,9 @@ final class AppState: ObservableObject {
     private let openAIUsageService = OpenAIUsageService()
     private let anthropicUsageService = AnthropicUsageService()
     private let openRouterCreditsService = OpenRouterCreditsService()
+    private let codexUsageService = CodexUsageService()
+    private let miniMaxUsageService = MiniMaxUsageService()
+    private let ccSwitchUsageService = CCSwitchUsageService()
 
     private init() {
         let savedPreferences = preferencesStore.load()
@@ -303,10 +306,16 @@ final class AppState: ObservableObject {
             async let openAIResult = openAIUsageService.refresh()
             async let anthropicResult = anthropicUsageService.refresh()
             async let openRouterResult = openRouterCreditsService.refresh()
+            async let codexResult = codexUsageService.refresh()
+            async let miniMaxResult = miniMaxUsageService.refresh()
+            async let ccSwitchResult = ccSwitchUsageService.refresh()
             apply(
                 openAIResult: await openAIResult,
                 anthropicResult: await anthropicResult,
-                openRouterResult: await openRouterResult
+                openRouterResult: await openRouterResult,
+                codexResult: await codexResult,
+                miniMaxResult: await miniMaxResult,
+                ccSwitchResult: await ccSwitchResult
             )
         }
     }
@@ -364,6 +373,26 @@ final class AppState: ObservableObject {
             providers[index].markSource(
                 .liveUnavailable,
                 detail: "OpenRouter live credits require OPENROUTER_API_KEY in Keychain or the app environment.",
+                clearUsage: true
+            )
+        }
+        persistProviders()
+        notifyStatusBarUpdate()
+    }
+
+    func storeMiniMaxAPIKey(_ key: String) async throws {
+        try await KeychainService.shared.store(value: key, for: "MINIMAX_API_KEY")
+        addAudit(provider: "MiniMax", action: "key.store", detail: "Stored MiniMax API key in Keychain")
+        refreshAll()
+    }
+
+    func clearMiniMaxAPIKey() async throws {
+        try await KeychainService.shared.delete(key: "MINIMAX_API_KEY")
+        addAudit(provider: "MiniMax", action: "key.delete", detail: "Removed MiniMax API key from Keychain")
+        if let index = providers.firstIndex(where: { $0.id == "minimax" }) {
+            providers[index].markSource(
+                .liveUnavailable,
+                detail: "MiniMax access verification uses the built-in Anthropic-compatible base URL https://api.minimaxi.com/anthropic and requires MINIMAX_API_KEY in Keychain or the app environment.",
                 clearUsage: true
             )
         }
@@ -553,7 +582,7 @@ final class AppState: ObservableObject {
 
     func applySelectedAppIcon() {
         guard let image = NSImage(named: selectedAppIcon.assetName) else { return }
-        NSApp.applicationIconImage = image
+        NSApplication.shared.applicationIconImage = image
     }
 
     func shortCountdown(to date: Date) -> String {
@@ -619,20 +648,28 @@ final class AppState: ObservableObject {
     private func apply(
         openAIResult: OpenAIUsageRefreshResult,
         anthropicResult: AnthropicUsageRefreshResult,
-        openRouterResult: OpenRouterCreditsRefreshResult
+        openRouterResult: OpenRouterCreditsRefreshResult,
+        codexResult: CodexUsageRefreshResult,
+        miniMaxResult: MiniMaxUsageRefreshResult,
+        ccSwitchResult: CCSwitchUsageRefreshResult
     ) {
         defer {
             lastRefresh = .now
             isRefreshingUsage = false
             currentDecision = evaluatePolicy(input: currentPolicyInput, shouldRecord: false)
             persistProviders()
-            NotificationService.shared.notifyIfNeeded(appState: self)
+            if CommandLine.arguments.contains("--tokenbar-verify-local-api") == false {
+                NotificationService.shared.notifyIfNeeded(appState: self)
+            }
             notifyStatusBarUpdate()
         }
 
         applyOpenAIResult(openAIResult)
         applyAnthropicResult(anthropicResult)
         applyOpenRouterResult(openRouterResult)
+        applyCodexResult(codexResult)
+        applyCCSwitchResult(ccSwitchResult)
+        applyMiniMaxResult(miniMaxResult)
     }
 
     private func applyOpenAIResult(_ result: OpenAIUsageRefreshResult) {
@@ -683,6 +720,72 @@ final class AppState: ObservableObject {
         case .failure(let detail):
             providers[index].markSource(.error, detail: detail)
             addAudit(provider: "OpenRouter", action: "credits.error", detail: detail)
+        }
+    }
+
+    private func applyCodexResult(_ result: CodexUsageRefreshResult) {
+        ensureCodexProviderExists()
+        guard let index = providers.firstIndex(where: { $0.id == "codex" }) else { return }
+
+        switch result {
+        case .success(let snapshot):
+            providers[index].apply(snapshot: snapshot)
+            let secondary = snapshot.secondaryUsedPercent.map { ", 7-day \(Int($0))%" } ?? ""
+            addAudit(provider: "Codex", action: "quota.live", detail: "Fetched Codex quota: 5-hour \(Int(snapshot.primaryUsedPercent))%\(secondary)")
+        case .unavailable(let detail):
+            if providers[index].sourceKind != .localAgent {
+                providers[index].markSource(.liveUnavailable, detail: detail, clearUsage: true)
+            }
+            addAudit(provider: "Codex", action: "quota.needs_auth", detail: "Codex quota refresh skipped because no local Codex auth is available")
+        case .failure(let detail):
+            providers[index].markSource(.error, detail: detail)
+            addAudit(provider: "Codex", action: "quota.error", detail: detail)
+        }
+    }
+
+    private func applyMiniMaxResult(_ result: MiniMaxUsageRefreshResult) {
+        ensureMiniMaxProviderExists()
+        guard let index = providers.firstIndex(where: { $0.id == "minimax" }) else { return }
+
+        switch result {
+        case .success(let snapshot):
+            if providers[index].sourceKind != .ccSwitch {
+                providers[index].apply(snapshot: snapshot)
+            } else {
+                providers[index].sourceDetail = "\(providers[index].sourceDescription) MiniMax API verification also succeeded with \(snapshot.modelCount) visible models at \(MiniMaxUsageSnapshot.anthropicBaseURL)."
+                providers[index].sourceUpdatedAt = snapshot.fetchedAt
+            }
+            addAudit(provider: "MiniMax", action: "access.live", detail: "Verified MiniMax access with \(snapshot.modelCount) visible models")
+        case .unavailable(let detail):
+            if providers[index].sourceKind != .ccSwitch {
+                providers[index].markSource(.liveUnavailable, detail: detail, clearUsage: true)
+            }
+            addAudit(provider: "MiniMax", action: "access.needs_key", detail: "MiniMax access refresh skipped because no API key is available")
+        case .failure(let detail):
+            if providers[index].sourceKind != .ccSwitch {
+                providers[index].markSource(.error, detail: detail)
+            }
+            addAudit(provider: "MiniMax", action: "access.error", detail: detail)
+        }
+    }
+
+    private func applyCCSwitchResult(_ result: CCSwitchUsageRefreshResult) {
+        switch result {
+        case .success(let snapshot):
+            for providerSnapshot in snapshot.providers {
+                ensureProviderExists(providerID: providerSnapshot.providerID)
+                if let index = providers.firstIndex(where: { $0.id == providerSnapshot.providerID }) {
+                    providers[index].name = providerSnapshot.displayName
+                    providers[index].category = providerSnapshot.category
+                    providers[index].symbolName = providerSnapshot.symbolName
+                    providers[index].apply(snapshot: providerSnapshot)
+                }
+            }
+            addAudit(provider: "CC Switch", action: "usage.local", detail: "Loaded \(snapshot.providers.count) provider rollups from CC Switch")
+        case .unavailable(let detail):
+            addAudit(provider: "CC Switch", action: "usage.unavailable", detail: detail)
+        case .failure(let detail):
+            addAudit(provider: "CC Switch", action: "usage.error", detail: detail)
         }
     }
 
@@ -738,6 +841,42 @@ final class AppState: ObservableObject {
             dataSource: .liveUnavailable,
             sourceDetail: "OpenRouter live credits require OPENROUTER_API_KEY in Keychain or the app environment."
         ), at: min(providers.count, 2))
+    }
+
+    private func ensureCodexProviderExists() {
+        guard providers.contains(where: { $0.id == "codex" }) == false else { return }
+        providers.insert(AppSeedData.provider(
+            id: "codex",
+            name: "Codex",
+            category: "AI Tool",
+            symbol: "terminal.fill",
+            current: 0,
+            limit: 100,
+            unit: "percent",
+            spendToday: 0,
+            spendMonth: 0,
+            resetHours: 5,
+            dataSource: .liveUnavailable,
+            sourceDetail: "Codex login quota requires ~/.codex/auth.json from a signed-in Codex session."
+        ), at: min(providers.count, 3))
+    }
+
+    private func ensureMiniMaxProviderExists() {
+        guard providers.contains(where: { $0.id == "minimax" }) == false else { return }
+        providers.insert(AppSeedData.provider(
+            id: "minimax",
+            name: "MiniMax",
+            category: "AI & API",
+            symbol: "bolt.horizontal.circle.fill",
+            current: 0,
+            limit: 0,
+            unit: "models",
+            spendToday: 0,
+            spendMonth: 0,
+            resetHours: 24 * 30,
+            dataSource: .liveUnavailable,
+            sourceDetail: "MiniMax access verification uses the built-in Anthropic-compatible base URL https://api.minimaxi.com/anthropic and requires MINIMAX_API_KEY in Keychain or the app environment."
+        ), at: min(providers.count, 4))
     }
 
     private func applyLocalAgentUsage(_ input: LocalAgentUsageIngest) -> LocalAgentUsageAppliedSnapshot {
@@ -845,6 +984,40 @@ final class AppState: ObservableObject {
             ensureAnthropicProviderExists()
         case "openrouter":
             ensureOpenRouterProviderExists()
+        case "codex":
+            ensureCodexProviderExists()
+        case "minimax":
+            ensureMiniMaxProviderExists()
+        case "deepseek":
+            providers.append(AppSeedData.provider(
+                id: "deepseek",
+                name: "DeepSeek",
+                category: "AI & API",
+                symbol: "scope",
+                current: 0,
+                limit: 0,
+                unit: "tokens",
+                spendToday: 0,
+                spendMonth: 0,
+                resetHours: 24 * 30,
+                dataSource: .liveUnavailable,
+                sourceDetail: "DeepSeek balance can be read from CC Switch config when present; TokenBar does not persist keys imported from CC Switch."
+            ))
+        case "xiaomi-mimo":
+            providers.append(AppSeedData.provider(
+                id: "xiaomi-mimo",
+                name: "Xiaomi MiMo",
+                category: "AI & API",
+                symbol: "waveform.path.ecg",
+                current: 0,
+                limit: 0,
+                unit: "tokens",
+                spendToday: 0,
+                spendMonth: 0,
+                resetHours: 24 * 30,
+                dataSource: .unsupported,
+                sourceDetail: "Xiaomi MiMo usage is available from CC Switch local proxy rollups when present."
+            ))
         default:
             providers.append(AppSeedData.provider(
                 id: providerID,
@@ -873,7 +1046,7 @@ final class AppState: ObservableObject {
         case .claudeCode:
             return "anthropic"
         case .codex:
-            return "openai"
+            return "codex"
         default:
             return selectedProviderID
         }

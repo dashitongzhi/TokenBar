@@ -60,6 +60,8 @@ enum L10n {
         "anthropicAdminKey": "ANTHROPIC_ADMIN_KEY",
         "openRouterLiveUsage": "OpenRouter Live Credits",
         "openRouterAPIKey": "OPENROUTER_API_KEY",
+        "miniMaxLiveUsage": "MiniMax Access",
+        "miniMaxAPIKey": "MINIMAX_API_KEY",
         "save": "Save",
         "clear": "Clear",
         "openAIKeySaved": "OpenAI admin key saved. Refreshing live usage.",
@@ -68,6 +70,8 @@ enum L10n {
         "anthropicKeyCleared": "Anthropic Admin API key removed.",
         "openRouterKeySaved": "OpenRouter API key saved. Refreshing live credits.",
         "openRouterKeyCleared": "OpenRouter API key removed.",
+        "miniMaxKeySaved": "MiniMax API key saved. Refreshing access status.",
+        "miniMaxKeyCleared": "MiniMax API key removed.",
         "communitySignal": "Community-backed feature set: reset countdowns, budget alerts, local discovery, and cross-provider totals.",
         "lastUpdated": "Last updated"
         ,"keyDiscovery": "Key Discovery"
@@ -204,6 +208,8 @@ enum L10n {
         "anthropicAdminKey": "ANTHROPIC_ADMIN_KEY",
         "openRouterLiveUsage": "OpenRouter 实时额度",
         "openRouterAPIKey": "OPENROUTER_API_KEY",
+        "miniMaxLiveUsage": "MiniMax 访问检测",
+        "miniMaxAPIKey": "MINIMAX_API_KEY",
         "save": "保存",
         "clear": "清除",
         "openAIKeySaved": "OpenAI 管理员密钥已保存，正在刷新实时用量。",
@@ -212,6 +218,8 @@ enum L10n {
         "anthropicKeyCleared": "Anthropic Admin API 密钥已移除。",
         "openRouterKeySaved": "OpenRouter API 密钥已保存，正在刷新实时额度。",
         "openRouterKeyCleared": "OpenRouter API 密钥已移除。",
+        "miniMaxKeySaved": "MiniMax API 密钥已保存，正在刷新访问状态。",
+        "miniMaxKeyCleared": "MiniMax API 密钥已移除。",
         "communitySignal": "来自社区需求的功能：重置倒计时、预算提醒、本地发现、跨平台汇总。",
         "lastUpdated": "上次更新"
         ,"keyDiscovery": "密钥发现"

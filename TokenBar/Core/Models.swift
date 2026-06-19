@@ -121,6 +121,7 @@ enum LocalAPIStatus: Equatable {
 enum UsageDataSource: String, Codable {
     case live
     case localAgent
+    case ccSwitch
     case liveUnavailable
     case unsupported
     case error
@@ -318,6 +319,88 @@ struct ProviderUsage: Identifiable, Codable, Equatable {
         dataSource = .live
         sourceUpdatedAt = snapshot.fetchedAt
         sourceDetail = "OpenRouter Credits API. Total credits and total usage are live; token buckets, request counts, and period spend are not exposed by this endpoint."
+    }
+
+    mutating func apply(snapshot: CodexUsageSnapshot) {
+        current = snapshot.primaryUsedPercent
+        limit = 100
+        unit = "percent"
+        tokensToday = 0
+        requestCountToday = 0
+        requestCountMonth = 0
+        currencyCode = "USD"
+        quotaLimitKnown = true
+        requestCountKnown = false
+        spendTodayKnown = false
+        spendMonthKnown = false
+        spendToday = 0
+        spendMonth = 0
+        resetAt = snapshot.primaryResetAt
+        lastUpdated = snapshot.fetchedAt
+        history = snapshot.history
+        dataSource = .live
+        sourceUpdatedAt = snapshot.fetchedAt
+
+        var detail = "Codex login quota from local ~/.codex/auth.json and ChatGPT wham usage. 5-hour window is \(Int(snapshot.primaryUsedPercent))% used."
+        if let secondaryUsedPercent = snapshot.secondaryUsedPercent, let secondaryResetAt = snapshot.secondaryResetAt {
+            let formatter = RelativeDateTimeFormatter()
+            formatter.unitsStyle = .short
+            detail += " 7-day window is \(Int(secondaryUsedPercent))% used and resets \(formatter.localizedString(for: secondaryResetAt, relativeTo: snapshot.fetchedAt))."
+        }
+        if let planType = snapshot.planType, planType.isEmpty == false {
+            detail += " Plan: \(planType.uppercased())."
+        }
+        if snapshot.allowed == false || snapshot.limitReached {
+            detail += " Upstream reports the Codex account is currently rate limited."
+        }
+        sourceDetail = detail
+    }
+
+    mutating func apply(snapshot: CCSwitchProviderUsageSnapshot) {
+        current = snapshot.tokenTotalMonth
+        limit = 0
+        unit = "tokens"
+        tokensToday = snapshot.tokenTotalToday
+        requestCountToday = snapshot.requestCountToday
+        requestCountMonth = snapshot.requestCountMonth
+        currencyCode = "USD"
+        quotaLimitKnown = false
+        requestCountKnown = true
+        spendTodayKnown = true
+        spendMonthKnown = true
+        spendToday = snapshot.spendToday
+        spendMonth = snapshot.spendMonth
+        resetAt = snapshot.monthResetAt
+        lastUpdated = snapshot.fetchedAt
+        history = snapshot.history.isEmpty
+            ? [UsagePoint(timestamp: snapshot.fetchedAt, value: snapshot.tokenTotalMonth)]
+            : snapshot.history
+        dataSource = .ccSwitch
+        sourceUpdatedAt = snapshot.fetchedAt
+        sourceDetail = snapshot.sourceDetail
+    }
+
+    mutating func apply(snapshot: MiniMaxUsageSnapshot) {
+        current = Double(snapshot.modelCount)
+        limit = 0
+        unit = "models"
+        tokensToday = tokensToday ?? 0
+        requestCountToday = requestCountToday ?? 0
+        requestCountMonth = requestCountMonth ?? 0
+        currencyCode = "USD"
+        quotaLimitKnown = false
+        requestCountKnown = false
+        spendTodayKnown = false
+        spendMonthKnown = false
+        spendToday = 0
+        spendMonth = 0
+        resetAt = snapshot.fetchedAt.addingTimeInterval(24 * 3600)
+        lastUpdated = snapshot.fetchedAt
+        history = [UsagePoint(timestamp: snapshot.fetchedAt, value: Double(snapshot.modelCount))]
+        dataSource = .live
+        sourceUpdatedAt = snapshot.fetchedAt
+        let models = snapshot.sampleModels.isEmpty ? "no model IDs returned" : snapshot.sampleModels.joined(separator: ", ")
+        sourceDetail = "MiniMax Anthropic-compatible API is reachable at \(MiniMaxUsageSnapshot.anthropicBaseURL). \(snapshot.modelCount) models visible: \(models). Usage and token-plan quotas are not exposed by this model-list endpoint."
     }
 
     mutating func apply(localUsage: LocalAgentUsageAppliedSnapshot) {

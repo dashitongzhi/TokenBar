@@ -32,7 +32,7 @@ struct ProviderUsageStore {
             var normalized = provider
             if normalized.id == "openai" {
                 normalized.quotaLimitKnown = normalized.dataSource == .live ? false : normalized.quotaLimitKnown ?? false
-                if normalized.dataSource != .live && normalized.dataSource != .localAgent {
+                if normalized.dataSource != .live && normalized.dataSource != .localAgent && normalized.dataSource != .ccSwitch {
                     let source = normalized.sourceKind == .error ? UsageDataSource.error : UsageDataSource.liveUnavailable
                     let detail = normalized.sourceKind == .error && normalized.sourceDescription.isEmpty == false
                         ? normalized.sourceDescription
@@ -48,7 +48,7 @@ struct ProviderUsageStore {
                 }
             } else if normalized.id == "anthropic" {
                 normalized.quotaLimitKnown = normalized.dataSource == .live ? false : normalized.quotaLimitKnown ?? false
-                if normalized.dataSource != .live && normalized.dataSource != .localAgent {
+                if normalized.dataSource != .live && normalized.dataSource != .localAgent && normalized.dataSource != .ccSwitch {
                     let source = normalized.sourceKind == .error ? UsageDataSource.error : UsageDataSource.liveUnavailable
                     let detail = normalized.sourceKind == .error && normalized.sourceDescription.isEmpty == false
                         ? normalized.sourceDescription
@@ -63,13 +63,13 @@ struct ProviderUsageStore {
                     )
                 }
             } else if normalized.id == "openrouter" {
-                if normalized.dataSource != .localAgent {
+                if normalized.dataSource != .localAgent && normalized.dataSource != .ccSwitch {
                     normalized.unit = "credits"
                     normalized.requestCountKnown = false
                 }
                 normalized.spendTodayKnown = normalized.dataSource == .live ? false : normalized.spendTodayKnown ?? false
                 normalized.spendMonthKnown = normalized.dataSource == .live ? false : normalized.spendMonthKnown ?? false
-                if normalized.dataSource != .live && normalized.dataSource != .localAgent {
+                if normalized.dataSource != .live && normalized.dataSource != .localAgent && normalized.dataSource != .ccSwitch {
                     let source = normalized.sourceKind == .error ? UsageDataSource.error : UsageDataSource.liveUnavailable
                     let detail = normalized.sourceKind == .error && normalized.sourceDescription.isEmpty == false
                         ? normalized.sourceDescription
@@ -83,7 +83,61 @@ struct ProviderUsageStore {
                         clearUsage: true
                     )
                 }
-            } else if normalized.dataSource == nil || (normalized.sourceKind != .unsupported && normalized.sourceKind != .localAgent) {
+            } else if normalized.id == "codex" {
+                if normalized.dataSource != .localAgent {
+                    normalized.unit = "percent"
+                    normalized.limit = normalized.limit > 0 ? normalized.limit : 100
+                    normalized.quotaLimitKnown = true
+                    normalized.requestCountKnown = false
+                    normalized.spendTodayKnown = false
+                    normalized.spendMonthKnown = false
+                }
+                if normalized.dataSource != .live && normalized.dataSource != .localAgent {
+                    let source = normalized.sourceKind == .error ? UsageDataSource.error : UsageDataSource.liveUnavailable
+                    let detail = normalized.sourceKind == .error && normalized.sourceDescription.isEmpty == false
+                        ? normalized.sourceDescription
+                        : "Codex login quota requires ~/.codex/auth.json from a signed-in Codex session."
+                    normalized.markSource(source, detail: detail, clearUsage: true)
+                }
+                if normalized.dataSource == nil {
+                    normalized.markSource(
+                        .liveUnavailable,
+                        detail: "Codex login quota requires ~/.codex/auth.json from a signed-in Codex session.",
+                        clearUsage: true
+                    )
+                }
+            } else if normalized.id == "minimax" {
+                if normalized.dataSource != .ccSwitch {
+                    normalized.unit = normalized.dataSource == .live ? "models" : normalized.unit
+                    normalized.quotaLimitKnown = false
+                    normalized.requestCountKnown = normalized.dataSource == .ccSwitch ? true : false
+                    normalized.spendTodayKnown = normalized.dataSource == .ccSwitch
+                    normalized.spendMonthKnown = normalized.dataSource == .ccSwitch
+                }
+                if normalized.dataSource != .live && normalized.dataSource != .ccSwitch && normalized.dataSource != .localAgent {
+                    let source = normalized.sourceKind == .error ? UsageDataSource.error : UsageDataSource.liveUnavailable
+                    let detail = normalized.sourceKind == .error && normalized.sourceDescription.isEmpty == false
+                        ? normalized.sourceDescription
+                        : "MiniMax access verification uses the built-in Anthropic-compatible base URL https://api.minimaxi.com/anthropic and requires MINIMAX_API_KEY in Keychain or the app environment."
+                    normalized.markSource(source, detail: detail, clearUsage: true)
+                }
+            } else if normalized.id == "deepseek" {
+                if normalized.dataSource != .ccSwitch && normalized.dataSource != .localAgent {
+                    normalized.markSource(
+                        .liveUnavailable,
+                        detail: "DeepSeek balance can be read from CC Switch config when present; TokenBar does not persist keys imported from CC Switch.",
+                        clearUsage: true
+                    )
+                }
+            } else if normalized.id == "xiaomi-mimo" {
+                if normalized.dataSource != .ccSwitch && normalized.dataSource != .localAgent {
+                    normalized.markSource(
+                        .unsupported,
+                        detail: "Xiaomi MiMo usage is available from CC Switch local proxy rollups when present.",
+                        clearUsage: normalized.dataSource == nil
+                    )
+                }
+            } else if normalized.dataSource == nil || (normalized.sourceKind != .unsupported && normalized.sourceKind != .localAgent && normalized.sourceKind != .ccSwitch) {
                 normalized.markSource(
                     .unsupported,
                     detail: "TokenBar does not have a live adapter for this provider yet.",

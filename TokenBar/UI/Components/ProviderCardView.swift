@@ -41,7 +41,7 @@ struct ProviderCardView: View {
                 if provider.hasKnownQuotaLimit {
                     Text("\(Int(provider.usageRatio * 100))%")
                         .font(.callout.monospacedDigit().weight(.medium))
-                } else if provider.sourceKind == .live || provider.sourceKind == .localAgent {
+                } else if provider.sourceKind == .live || provider.sourceKind == .localAgent || provider.sourceKind == .ccSwitch {
                     Text(provider.displayCurrency)
                         .font(.callout.monospacedDigit().weight(.medium))
                         .foregroundStyle(.secondary)
@@ -88,6 +88,9 @@ struct ProviderCardView: View {
         }
         if provider.sourceKind == .localAgent {
             return provider.hasKnownQuotaLimit ? provider.unit : "\(provider.unit) local"
+        }
+        if provider.sourceKind == .ccSwitch {
+            return "\(provider.unit) via CC Switch"
         }
         return provider.unit
     }

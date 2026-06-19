@@ -37,6 +37,17 @@ struct LiveProviderCredentialPanels: View {
                 saveAction: appState.storeOpenRouterAPIKey,
                 clearAction: appState.clearOpenRouterAPIKey
             )
+
+            LiveProviderKeyPanel(
+                providerID: "minimax",
+                titleKey: "miniMaxLiveUsage",
+                fieldKey: "miniMaxAPIKey",
+                symbolName: "bolt.horizontal.circle.fill",
+                savedKey: "miniMaxKeySaved",
+                clearedKey: "miniMaxKeyCleared",
+                saveAction: appState.storeMiniMaxAPIKey,
+                clearAction: appState.clearMiniMaxAPIKey
+            )
         }
     }
 }
