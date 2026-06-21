@@ -121,6 +121,8 @@ final class AppState: ObservableObject {
 
     private let preferencesStore = AppPreferencesStore()
     private let providerStore = ProviderUsageStore()
+    private let workspacePolicyStore = WorkspacePolicyStore()
+    private let auditEventStore = AuditEventStore()
     private let localAgentUsageLedgerStore = LocalAgentUsageLedgerStore()
     private let openAIUsageService = OpenAIUsageService()
     private let anthropicUsageService = AnthropicUsageService()
@@ -148,8 +150,8 @@ final class AppState: ObservableObject {
         selectedAppIcon = savedPreferences.selectedAppIcon
 
         providers = providerStore.load(defaults: AppSeedData.providers())
-        workspacePolicies = AppSeedData.workspacePolicies()
-        auditEvents = AppSeedData.auditEvents()
+        workspacePolicies = workspacePolicyStore.load(defaults: AppSeedData.workspacePolicies())
+        auditEvents = auditEventStore.load(defaults: AppSeedData.auditEvents())
         rebuildPolicyInput()
         currentDecision = evaluatePolicy(input: currentPolicyInput, shouldRecord: false)
         recentDecisions = [currentDecision]
@@ -623,13 +625,18 @@ final class AppState: ObservableObject {
 
     private func addAudit(provider: String, action: String, detail: String) {
         auditEvents.insert(AuditEvent(timestamp: .now, provider: provider, action: action, detail: detail), at: 0)
-        if auditEvents.count > 30 {
-            auditEvents.removeLast(auditEvents.count - 30)
+        if auditEvents.count > 100 {
+            auditEvents.removeLast(auditEvents.count - 100)
         }
+        auditEventStore.save(auditEvents)
     }
 
     private func persistProviders() {
         providerStore.save(providers)
+    }
+
+    private func persistWorkspacePolicies() {
+        workspacePolicyStore.save(workspacePolicies)
     }
 
     private func rebuildPolicyInput() {
@@ -933,6 +940,7 @@ final class AppState: ObservableObject {
             detail: "\(model) · \(providerID) · +$\(formatMoney(delta.costUSD)) · +\(Int(delta.tokens)) tokens"
         )
         persistProviders()
+        persistWorkspacePolicies()
         notifyStatusBarUpdate()
         return snapshot
     }

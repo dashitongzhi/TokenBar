@@ -7,9 +7,42 @@ final class LocalAPIServer {
     static let shared = LocalAPIServer(appState: .shared)
 
     private let appState: AppState
+    private let tokenStore = LocalAPITokenStore()
     private var listener: NWListener?
     private let queue = DispatchQueue(label: "TokenBar.LocalAPIServer")
     private let logger = Logger(subsystem: "Kral.TokenBar", category: "LocalAPIServer")
+
+    private struct HTTPRequest {
+        var method: String
+        var path: String
+        var headers: [String: String]
+        var body: Data
+
+        var origin: String? {
+            headers["origin"]
+        }
+    }
+
+    private struct HTTPResponse {
+        var statusCode: Int
+        var reason: String
+        var body: Data
+        var headers: [String: String]
+
+        static func json(_ body: Data, statusCode: Int = 200, reason: String = "OK", headers: [String: String] = [:]) -> HTTPResponse {
+            HTTPResponse(statusCode: statusCode, reason: reason, body: body, headers: headers)
+        }
+
+        static func empty(statusCode: Int, reason: String, headers: [String: String] = [:]) -> HTTPResponse {
+            HTTPResponse(statusCode: statusCode, reason: reason, body: Data(), headers: headers)
+        }
+
+        static func error(_ code: String, statusCode: Int, reason: String, headers: [String: String] = [:]) -> HTTPResponse {
+            let payload = ["error": code]
+            let body = (try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])) ?? Data(#"{"error":"unknown"}"#.utf8)
+            return HTTPResponse(statusCode: statusCode, reason: reason, body: body, headers: headers)
+        }
+    }
 
     init(appState: AppState) {
         self.appState = appState
@@ -35,7 +68,11 @@ final class LocalAPIServer {
         }
         appState.setLocalAPIStatus(.starting(port: port))
         do {
-            let listener = try NWListener(using: .tcp, on: endpointPort)
+            _ = tokenStore.token()
+            let parameters = NWParameters.tcp
+            parameters.allowLocalEndpointReuse = true
+            parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(IPv4Address("127.0.0.1")!), port: endpointPort)
+            let listener = try NWListener(using: parameters)
             listener.stateUpdateHandler = { [weak self, weak listener] state in
                 guard let self, let listener else { return }
                 Task { @MainActor [self, listener] in
@@ -60,16 +97,21 @@ final class LocalAPIServer {
     }
 
     private nonisolated func handle(_ connection: NWConnection) {
+        guard Self.isLoopbackEndpoint(connection.endpoint) else {
+            connection.cancel()
+            return
+        }
+
         connection.start(queue: queue)
-            connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { [weak self] data, _, _, _ in
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { [weak self] data, _, _, _ in
             guard let self else {
                 connection.cancel()
                 return
             }
-            let request = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+            let request = data.flatMap(Self.parseRequest)
             Task { @MainActor in
-                let body = self.route(request: request)
-                let response = self.httpResponse(body: body)
+                let routed = self.route(request: request)
+                let response = self.httpResponse(response: routed, request: request)
                 connection.send(content: response, completion: .contentProcessed { _ in
                     self.queue.asyncAfter(deadline: .now() + 0.05) {
                         connection.cancel()
@@ -102,78 +144,209 @@ final class LocalAPIServer {
         }
     }
 
-    private func route(request: String) -> Data {
-        let firstLine = request.split(separator: "\r\n").first ?? ""
-        let parts = firstLine.split(separator: " ")
-        let path = parts.count >= 2 ? String(parts[1]) : "/health"
-
-        if path == "/health" {
-            return Data(#"{"status":"ok","service":"TokenBar","version":"1.0","positioning":"local_ai_agent_policy_guard"}"#.utf8)
+    private func route(request: HTTPRequest?) -> HTTPResponse {
+        guard let request else {
+            return .error("bad_request", statusCode: 400, reason: "Bad Request")
         }
 
-        if path == "/policy" {
-            return appState.policyJSON()
+        guard Self.isAllowedOrigin(request.origin) else {
+            return .error("origin_not_allowed", statusCode: 403, reason: "Forbidden")
         }
 
-        if path == "/policy/evaluate" {
-            guard let input = policyInput(from: request) else {
-                return Data(#"{"error":"invalid_policy_input"}"#.utf8)
+        if request.method == "OPTIONS" {
+            return .empty(
+                statusCode: 204,
+                reason: "No Content",
+                headers: [
+                    "Access-Control-Allow-Headers": "Authorization, Content-Type",
+                    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+                    "Access-Control-Max-Age": "600"
+                ]
+            )
+        }
+
+        if request.path == "/health" {
+            guard request.method == "GET" else { return methodNotAllowed(["GET"]) }
+            return .json(Data(#"{"status":"ok","service":"TokenBar","version":"1.0","positioning":"local_ai_agent_policy_guard"}"#.utf8))
+        }
+
+        guard isAuthorized(request) else {
+            return .error(
+                "unauthorized",
+                statusCode: 401,
+                reason: "Unauthorized",
+                headers: ["WWW-Authenticate": #"Bearer realm="TokenBar Local API""#]
+            )
+        }
+
+        if request.path == "/policy" {
+            guard request.method == "GET" else { return methodNotAllowed(["GET"]) }
+            return .json(appState.policyJSON())
+        }
+
+        if request.path == "/policy/evaluate" {
+            guard request.method == "POST" else { return methodNotAllowed(["POST"]) }
+            guard let input = policyInput(from: request.body) else {
+                return .error("invalid_policy_input", statusCode: 400, reason: "Bad Request")
             }
-            return appState.policyDecisionJSON(input: input)
+            return .json(appState.policyDecisionJSON(input: input))
         }
 
-        if path == "/usage/ingest" {
-            guard let input = localAgentUsageInput(from: request) else {
-                return Data(#"{"error":"invalid_local_usage_input"}"#.utf8)
+        if request.path == "/usage/ingest" {
+            guard request.method == "POST" else { return methodNotAllowed(["POST"]) }
+            guard let input = localAgentUsageInput(from: request.body) else {
+                return .error("invalid_local_usage_input", statusCode: 400, reason: "Bad Request")
             }
-            return appState.ingestLocalAgentUsageJSON(input: input)
+            return .json(appState.ingestLocalAgentUsageJSON(input: input))
         }
 
-        if path == "/usage/claude-statusline" {
-            guard let data = bodyData(from: request) else {
-                return Data(#"{"error":"invalid_claude_statusline_input"}"#.utf8)
-            }
-            return appState.ingestClaudeStatuslineJSON(data: data)
+        if request.path == "/usage/claude-statusline" {
+            guard request.method == "POST" else { return methodNotAllowed(["POST"]) }
+            return .json(appState.ingestClaudeStatuslineJSON(data: request.body))
         }
 
-        if path == "/quotas" {
-            return appState.mcpSnapshotJSON()
+        if request.path == "/quotas" {
+            guard request.method == "GET" else { return methodNotAllowed(["GET"]) }
+            return .json(appState.mcpSnapshotJSON())
         }
 
-        if path.hasPrefix("/quotas/") {
-            let provider = String(path.dropFirst("/quotas/".count))
-            return appState.mcpSnapshotJSON(filteredProviderID: provider)
+        if request.path.hasPrefix("/quotas/") {
+            guard request.method == "GET" else { return methodNotAllowed(["GET"]) }
+            let provider = String(request.path.dropFirst("/quotas/".count))
+            return .json(appState.mcpSnapshotJSON(filteredProviderID: provider))
         }
 
-        if path.hasPrefix("/pace/") {
-            let provider = String(path.dropFirst("/pace/".count))
-            return appState.paceJSON(providerID: provider)
+        if request.path.hasPrefix("/pace/") {
+            guard request.method == "GET" else { return methodNotAllowed(["GET"]) }
+            let provider = String(request.path.dropFirst("/pace/".count))
+            return .json(appState.paceJSON(providerID: provider))
         }
 
-        return Data(#"{"error":"not_found"}"#.utf8)
+        return .error("not_found", statusCode: 404, reason: "Not Found")
     }
 
-    private func policyInput(from request: String) -> PolicyEvaluationInput? {
-        guard let data = bodyData(from: request) else { return nil }
-        return try? JSONDecoder.tokenBar.decode(PolicyEvaluationInput.self, from: data)
+    private func methodNotAllowed(_ methods: [String]) -> HTTPResponse {
+        .error(
+            "method_not_allowed",
+            statusCode: 405,
+            reason: "Method Not Allowed",
+            headers: ["Allow": methods.joined(separator: ", ")]
+        )
     }
 
-    private func localAgentUsageInput(from request: String) -> LocalAgentUsageIngest? {
-        guard let data = bodyData(from: request) else { return nil }
+    private func isAuthorized(_ request: HTTPRequest) -> Bool {
+        guard let header = request.headers["authorization"]?.trimmingCharacters(in: .whitespacesAndNewlines) else {
+            return false
+        }
+        let pieces = header.split(separator: " ", maxSplits: 1).map(String.init)
+        guard pieces.count == 2, pieces[0].lowercased() == "bearer" else { return false }
+        return Self.secureCompare(pieces[1], tokenStore.token())
+    }
+
+    private func policyInput(from data: Data) -> PolicyEvaluationInput? {
+        try? JSONDecoder.tokenBar.decode(PolicyEvaluationInput.self, from: data)
+    }
+
+    private func localAgentUsageInput(from data: Data) -> LocalAgentUsageIngest? {
         return try? JSONDecoder.tokenBar.decode(LocalAgentUsageIngest.self, from: data)
     }
 
-    private func bodyData(from request: String) -> Data? {
-        let marker = "\r\n\r\n"
-        guard let range = request.range(of: marker) else { return nil }
-        let body = String(request[range.upperBound...])
-        return body.data(using: .utf8)
+    private nonisolated static func parseRequest(data: Data) -> HTTPRequest? {
+        let separator = Data("\r\n\r\n".utf8)
+        guard let range = data.range(of: separator) else { return nil }
+        let headerData = data[..<range.lowerBound]
+        guard let headerText = String(data: headerData, encoding: .utf8) else { return nil }
+
+        let lines = headerText.components(separatedBy: "\r\n")
+        guard let firstLine = lines.first else { return nil }
+        let parts = firstLine.split(separator: " ", maxSplits: 2).map(String.init)
+        guard parts.count >= 2 else { return nil }
+
+        var path = parts[1]
+        if let queryStart = path.firstIndex(of: "?") {
+            path = String(path[..<queryStart])
+        }
+
+        var headers: [String: String] = [:]
+        for line in lines.dropFirst() {
+            guard let separator = line.firstIndex(of: ":") else { continue }
+            let name = line[..<separator].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let value = line[line.index(after: separator)...].trimmingCharacters(in: .whitespacesAndNewlines)
+            headers[name] = value
+        }
+
+        return HTTPRequest(
+            method: parts[0].uppercased(),
+            path: path,
+            headers: headers,
+            body: Data(data[range.upperBound...])
+        )
     }
 
-    private nonisolated func httpResponse(body: Data) -> Data {
-        let headers = "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n"
-        var data = Data(headers.utf8)
-        data.append(body)
+    private func httpResponse(response: HTTPResponse, request: HTTPRequest?) -> Data {
+        var headers: [String: String] = [
+            "Content-Length": "\(response.body.count)",
+            "Connection": "close"
+        ]
+        if response.body.isEmpty == false {
+            headers["Content-Type"] = "application/json; charset=utf-8"
+        }
+        response.headers.forEach { headers[$0.key] = $0.value }
+
+        if let origin = request?.origin, Self.isAllowedOrigin(origin) {
+            headers["Access-Control-Allow-Origin"] = origin
+            headers["Vary"] = "Origin"
+        }
+
+        var headerLines = ["HTTP/1.1 \(response.statusCode) \(response.reason)"]
+        headerLines.append(contentsOf: headers.map { "\($0.key): \($0.value)" })
+        headerLines.append("")
+        headerLines.append("")
+
+        var data = Data(headerLines.joined(separator: "\r\n").utf8)
+        data.append(response.body)
         return data
+    }
+
+    private nonisolated static func isAllowedOrigin(_ origin: String?) -> Bool {
+        guard let origin, origin.isEmpty == false else { return true }
+        guard let components = URLComponents(string: origin),
+              let scheme = components.scheme?.lowercased(),
+              let host = components.host?.lowercased() else {
+            return false
+        }
+        return (scheme == "http" || scheme == "https") && ["localhost", "127.0.0.1", "::1"].contains(host)
+    }
+
+    private nonisolated static func isLoopbackEndpoint(_ endpoint: NWEndpoint) -> Bool {
+        switch endpoint {
+        case .hostPort(let host, _):
+            switch host {
+            case .name(let name, _):
+                return name == "localhost"
+            case .ipv4(let address):
+                return String(describing: address).hasPrefix("127.")
+            case .ipv6(let address):
+                return String(describing: address) == "::1"
+            @unknown default:
+                return false
+            }
+        case .service, .unix, .url, .opaque:
+            return false
+        @unknown default:
+            return false
+        }
+    }
+
+    private nonisolated static func secureCompare(_ lhs: String, _ rhs: String) -> Bool {
+        let left = Array(lhs.utf8)
+        let right = Array(rhs.utf8)
+        guard left.count == right.count else { return false }
+
+        var difference: UInt8 = 0
+        for index in left.indices {
+            difference |= left[index] ^ right[index]
+        }
+        return difference == 0
     }
 }

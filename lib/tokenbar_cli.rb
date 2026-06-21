@@ -13,6 +13,7 @@ require "yaml"
 
 module TokenBarCLI
   DEFAULT_API_URL = "http://127.0.0.1:3847"
+  LOCAL_API_TOKEN_PATH = Pathname.new("~/Library/Application Support/TokenBar/local-api-token").expand_path.freeze
   CONFIG_NAMES = %w[tokenbar.yml tokenbar.yaml].freeze
   EXIT_BY_STATUS = { "allow" => 0, "warn" => 1, "block" => 2 }.freeze
   AGENT_DISPLAY = {
@@ -146,10 +147,11 @@ module TokenBarCLI
     end
 
     unless response
-      raise Error, "TokenBar app is not running and no tokenbar.yml was found" unless config
+      raise Error, "#{api_failure_message("policy checks require the app API")} and no tokenbar.yml was found" unless config
 
       response = offline_policy_response(input, config)
       source = "tokenbar_yml"
+      fallback_reason ||= @last_api_error if @last_api_error
     end
 
     response["source"] = source
@@ -327,7 +329,7 @@ module TokenBarCLI
     validate_usage_input!(input)
 
     response = post_local_usage_ingest(options[:api_url], input)
-    raise Error, "TokenBar app is not running; local usage ingestion requires the app API" unless response
+    raise Error, api_failure_message("local usage ingestion requires the app API") unless response
 
     if output_json
       puts JSON.pretty_generate(response)
@@ -358,7 +360,7 @@ module TokenBarCLI
     validate_usage_input!(input)
 
     response = post_local_usage_ingest(options[:api_url], input)
-    raise Error, "TokenBar app is not running; Claude Code statusline ingestion requires the app API" unless response
+    raise Error, api_failure_message("Claude Code statusline ingestion requires the app API") unless response
 
     if output_json
       puts JSON.pretty_generate(response)
@@ -399,7 +401,7 @@ module TokenBarCLI
     validate_usage_input!(input)
 
     response = post_local_usage_ingest(options[:api_url], input)
-    raise Error, "TokenBar app is not running; Codex local usage ingestion requires the app API" unless response
+    raise Error, api_failure_message("Codex local usage ingestion requires the app API") unless response
 
     if output_json
       puts JSON.pretty_generate(response)
@@ -430,12 +432,13 @@ module TokenBarCLI
   def post_json(api_url, path, input)
     uri = endpoint(api_url, path)
     if curl_available?
-      body = curl_request(["-X", "POST", "-H", "Content-Type: application/json", "--data", JSON.generate(input), uri.to_s])
+      body = curl_request(["-X", "POST", "-H", "Content-Type: application/json", *auth_curl_headers, "--data", JSON.generate(input), uri.to_s])
       return body ? JSON.parse(body) : nil
     end
 
     request = Net::HTTP::Post.new(uri)
     request["Content-Type"] = "application/json"
+    apply_auth_header(request)
     request.body = JSON.generate(input)
     response = http_request(uri, request)
     return nil unless response&.is_a?(Net::HTTPSuccess)
@@ -448,11 +451,13 @@ module TokenBarCLI
   def http_get(api_url, path)
     uri = endpoint(api_url, path)
     if curl_available?
-      body = curl_request([uri.to_s])
+      body = curl_request([*auth_curl_headers, uri.to_s])
       return body ? JSON.parse(body) : nil
     end
 
-    response = http_request(uri, Net::HTTP::Get.new(uri))
+    request = Net::HTTP::Get.new(uri)
+    apply_auth_header(request)
+    response = http_request(uri, request)
     return nil unless response&.is_a?(Net::HTTPSuccess)
 
     JSON.parse(response.body)
@@ -466,18 +471,75 @@ module TokenBarCLI
   end
 
   def curl_request(args)
-    stdout, _stderr, status = Open3.capture3("curl", "-fsS", "--max-time", "2", *args)
-    return nil unless status.success?
+    @last_api_error = nil
+    stdout, _stderr, status = Open3.capture3("curl", "-sS", "--max-time", "2", "-w", "\n%{http_code}", *args)
+    unless status.success?
+      @last_api_error = "connection_failed"
+      return nil
+    end
 
-    stdout
+    body, separator, code = stdout.rpartition("\n")
+    unless separator && code.match?(/\A\d{3}\z/)
+      @last_api_error = "invalid_response"
+      return nil
+    end
+
+    http_status = code.to_i
+    return body if http_status.between?(200, 299)
+
+    @last_api_error = "http_#{http_status}"
+    nil
   end
 
   def http_request(uri, request)
+    @last_api_error = nil
     Net::HTTP.start(uri.host, uri.port, use_ssl: uri.scheme == "https", open_timeout: 0.5, read_timeout: 1.5) do |http|
-      http.request(request)
+      response = http.request(request)
+      @last_api_error = "http_#{response.code}" unless response.is_a?(Net::HTTPSuccess)
+      response
     end
   rescue Errno::ECONNREFUSED, Errno::EHOSTUNREACH, Errno::ENETUNREACH, SocketError, Net::OpenTimeout, Net::ReadTimeout
+    @last_api_error = "connection_failed"
     nil
+  end
+
+  def auth_curl_headers
+    token = api_token
+    return [] if blank?(token)
+
+    ["-H", "Authorization: Bearer #{token}"]
+  end
+
+  def apply_auth_header(request)
+    token = api_token
+    request["Authorization"] = "Bearer #{token}" unless blank?(token)
+  end
+
+  def api_token
+    env_token = ENV["TOKENBAR_API_TOKEN"]
+    return env_token.strip unless blank?(env_token)
+    return nil unless LOCAL_API_TOKEN_PATH.file?
+
+    LOCAL_API_TOKEN_PATH.read.strip
+  rescue SystemCallError
+    nil
+  end
+
+  def api_failure_message(action)
+    case @last_api_error
+    when "http_401"
+      "TokenBar local API rejected the request; set TOKENBAR_API_TOKEN or start the current TokenBar app so #{LOCAL_API_TOKEN_PATH} is available"
+    when "http_403"
+      "TokenBar local API rejected the request origin or authorization; #{action}"
+    when "http_400"
+      "TokenBar local API rejected the payload; #{action}"
+    when "http_404", "http_405"
+      "TokenBar local API route or method is not supported by the running app; #{action}"
+    when /\Ahttp_(\d{3})\z/
+      "TokenBar local API returned HTTP #{Regexp.last_match(1)}; #{action}"
+    else
+      "TokenBar app is not running; #{action}"
+    end
   end
 
   def endpoint(api_url, path)

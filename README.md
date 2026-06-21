@@ -10,7 +10,7 @@ It helps developers stop expensive or unsafe agent runs before they happen: wron
 - Evaluates Claude Code, Codex, Cursor, Continue, or custom agent runs
 - Applies workspace policies by repo/client/project
 - Checks provider allowlists, blocked models, per-run caps, daily budgets, and company-key requirements
-- Exposes a local-only HTTP API on `localhost:3847`
+- Exposes a loopback-only HTTP API on `127.0.0.1:3847` with bearer auth for non-health endpoints
 - Keeps API-key handling local and Keychain-oriented
 - Reads live OpenAI and Anthropic organization usage plus OpenRouter credits when keys are available
 
@@ -56,7 +56,7 @@ TokenBar includes a dependency-free local CLI at `bin/tokenbar`.
 - `2`: block
 - `3`: CLI/config/API error
 
-The CLI first calls the running app's `POST /policy/evaluate` endpoint on `http://127.0.0.1:3847`. If the app is not running, it searches upward from the current directory for `tokenbar.yml` or `tokenbar.yaml` and evaluates the same workspace policy locally. If the app responds for a different workspace than the discovered config, the CLI also uses the local config instead of silently accepting the wrong workspace decision. That offline path is intentionally narrow: provider allowlists, blocked model substrings, per-run cost caps, daily budget projection, and company-key requirements mirror the current `PolicyEngine`.
+The CLI first calls the running app's authenticated `POST /policy/evaluate` endpoint on `http://127.0.0.1:3847`. It reads the local API bearer token from `TOKENBAR_API_TOKEN` or `~/Library/Application Support/TokenBar/local-api-token`, so hooks do not need to pass secrets manually. If the app is not running, it searches upward from the current directory for `tokenbar.yml` or `tokenbar.yaml` and evaluates the same workspace policy locally. If the app responds for a different workspace than the discovered config, the CLI also uses the local config instead of silently accepting the wrong workspace decision. That offline path is intentionally narrow: provider allowlists, blocked model substrings, per-run cost caps, daily budget projection, and company-key requirements mirror the current `PolicyEngine`.
 
 `tokenbar status` reports whether the local app API is reachable and which project config file will be used for offline checks.
 
@@ -142,16 +142,25 @@ The repo includes its own `tokenbar.yml`, so you can dogfood the offline flow im
 
 ## Local API
 
+The local API binds to loopback only. `GET /health` is intentionally unauthenticated for readiness checks; every policy, quota, pace, or usage endpoint requires `Authorization: Bearer <local-token>`. The app creates the token at `~/Library/Application Support/TokenBar/local-api-token` with user-only file permissions, and the CLI reads it automatically. Browser CORS responses are restricted to localhost origins; TokenBar does not emit `Access-Control-Allow-Origin: *`.
+
 ```bash
 curl http://127.0.0.1:3847/health
-curl http://127.0.0.1:3847/policy
-curl http://127.0.0.1:3847/quotas/anthropic
+
+TOKENBAR_API_TOKEN="$(cat "$HOME/Library/Application Support/TokenBar/local-api-token")"
+
+curl http://127.0.0.1:3847/policy \
+  -H "Authorization: Bearer $TOKENBAR_API_TOKEN"
+
+curl http://127.0.0.1:3847/quotas/anthropic \
+  -H "Authorization: Bearer $TOKENBAR_API_TOKEN"
 ```
 
 Evaluate a proposed agent run:
 
 ```bash
 curl -X POST http://127.0.0.1:3847/policy/evaluate \
+  -H "Authorization: Bearer $TOKENBAR_API_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{
     "agent": "claudeCode",
@@ -188,6 +197,7 @@ Ingest local agent usage:
 
 ```bash
 curl -X POST http://127.0.0.1:3847/usage/ingest \
+  -H "Authorization: Bearer $TOKENBAR_API_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{
     "agent": "claudeCode",
