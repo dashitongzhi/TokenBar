@@ -29,6 +29,13 @@ module TokenBarCLI
     [/o4-mini|o3-mini/i, { input: 1.10, cached_input: 0.275, output: 4.40 }],
     [/o3/i, { input: 10.00, cached_input: 2.50, output: 40.00 }]
   ].freeze
+  CODEX_PROMPT_TOKEN_DIVISOR = 4.0
+  CODEX_TASK_SIZE_ESTIMATES = {
+    small: { base_input: 8_000, output: 2_000 },
+    medium: { base_input: 24_000, output: 6_000 },
+    large: { base_input: 60_000, output: 14_000 },
+    xlarge: { base_input: 120_000, output: 28_000 }
+  }.freeze
 
   class Error < StandardError; end
 
@@ -110,9 +117,18 @@ module TokenBarCLI
       "workspaceID" => nil,
       "providerID" => ENV["TOKENBAR_PROVIDER"],
       "model" => ENV["TOKENBAR_MODEL"],
-      "estimatedCost" => numeric_env("TOKENBAR_ESTIMATED_COST", 0.0),
-      "estimatedTokens" => integer_env("TOKENBAR_ESTIMATED_TOKENS", 0),
+      "estimatedCost" => numeric_env("TOKENBAR_ESTIMATED_COST", nil),
+      "estimatedTokens" => integer_env("TOKENBAR_ESTIMATED_TOKENS", nil),
+      "keySource" => ENV["TOKENBAR_KEY_SOURCE"],
       "intent" => ENV.fetch("TOKENBAR_INTENT", "unspecified")
+    }
+    check_options = {
+      codex_hook_json: false,
+      prompt: ENV["TOKENBAR_PROMPT"],
+      prompt_file: ENV["TOKENBAR_PROMPT_FILE"],
+      provider_explicit: !blank?(ENV["TOKENBAR_PROVIDER"]),
+      cost_explicit: !blank?(ENV["TOKENBAR_ESTIMATED_COST"]),
+      tokens_explicit: !blank?(ENV["TOKENBAR_ESTIMATED_TOKENS"])
     }
     output_json = options[:json]
 
@@ -120,10 +136,14 @@ module TokenBarCLI
       opts.banner = "Usage: tokenbar check --agent AGENT --provider PROVIDER --model MODEL [options]"
       opts.on("--agent AGENT", "claudeCode, codex, cursor, continueDev, or custom") { |value| input["agent"] = value }
       opts.on("--workspace-id ID", "Override tokenbar.yml workspace id") { |value| input["workspaceID"] = value }
-      opts.on("--provider PROVIDER", "Provider id, such as anthropic or openai") { |value| input["providerID"] = value }
+      opts.on("--provider PROVIDER", "Provider id, such as anthropic or openai") { |value| input["providerID"] = value; check_options[:provider_explicit] = true }
       opts.on("--model MODEL", "Model name or slug") { |value| input["model"] = value }
-      opts.on("--estimated-cost COST", Float, "Estimated run cost in USD") { |value| input["estimatedCost"] = value }
-      opts.on("--estimated-tokens TOKENS", Integer, "Estimated token count") { |value| input["estimatedTokens"] = value }
+      opts.on("--estimated-cost COST", Float, "Estimated run cost in USD") { |value| input["estimatedCost"] = value; check_options[:cost_explicit] = true }
+      opts.on("--estimated-tokens TOKENS", Integer, "Estimated token count") { |value| input["estimatedTokens"] = value; check_options[:tokens_explicit] = true }
+      opts.on("--key-source SOURCE", "Key provenance, such as codex_managed, company_managed, env, or personal") { |value| input["keySource"] = value }
+      opts.on("--prompt TEXT", "Prompt text used to estimate Codex runs when cost/tokens are omitted") { |value| check_options[:prompt] = value }
+      opts.on("--prompt-file PATH", "Read prompt text from PATH for Codex estimates") { |value| check_options[:prompt_file] = value }
+      opts.on("--codex-hook-json", "Read Codex UserPromptSubmit JSON from stdin and estimate missing cost/tokens") { check_options[:codex_hook_json] = true }
       opts.on("--intent INTENT", "Run intent, such as refactor or debug") { |value| input["intent"] = value }
       opts.on("--json", "Print machine-readable JSON") { output_json = true }
       opts.on("-h", "--help", "Show help") do
@@ -133,8 +153,17 @@ module TokenBarCLI
     end
     parser.parse!(argv)
 
+    hook_payload = check_options[:codex_hook_json] ? read_stdin_json : {}
+    apply_codex_prompt_payload!(input, check_options, hook_payload)
     config = load_config(options[:config_path])
+    if input["agent"] == "codex" && !check_options[:provider_explicit]
+      input["providerID"] = provider_from_model_or_agent(input["model"], input["agent"]) || input["providerID"]
+    end
     apply_config_defaults!(input, config)
+    apply_codex_key_source_default!(input, check_options)
+    estimate = apply_codex_preflight_estimate!(input, check_options, config)
+    input["estimatedCost"] ||= 0.0
+    input["estimatedTokens"] ||= 0
     validate_check_input!(input)
 
     response = post_policy_evaluate(options[:api_url], input)
@@ -157,6 +186,7 @@ module TokenBarCLI
     response["source"] = source
     response["configPath"] = config&.fetch("path", nil)
     response["fallbackReason"] = fallback_reason if fallback_reason
+    response["preflightEstimate"] = estimate if estimate
 
     if output_json
       puts JSON.pretty_generate(response)
@@ -875,6 +905,110 @@ module TokenBarCLI
     }
   end
 
+  def apply_codex_prompt_payload!(input, options, payload)
+    return if payload.empty?
+
+    input["agent"] = "codex" if input["agent"] == "custom"
+    input["model"] ||= dig_path(payload, %w[model id]) ||
+                       dig_path(payload, %w[model name]) ||
+                       string_deep_find(payload, %w[model model_id modelId])
+    input["intent"] = string_deep_find(payload, %w[intent task_kind taskKind]) || input["intent"]
+    input["keySource"] ||= string_deep_find(payload, %w[key_source keySource key_provenance keyProvenance])
+    options[:prompt] ||= string_deep_find(payload, %w[prompt user_prompt userPrompt message input])
+    options[:cwd] ||= string_deep_find(payload, %w[cwd current_dir currentDirectory workspace_path workspacePath])
+  end
+
+  def apply_codex_key_source_default!(input, options)
+    return unless input["agent"] == "codex"
+    return unless blank?(input["keySource"])
+
+    input["keySource"] = if options[:codex_hook_json]
+                           "codex_managed"
+                         elsif input["providerID"] == "openai" && openai_key_env_present?
+                           "env"
+                         end
+  end
+
+  def openai_key_env_present?
+    %w[OPENAI_API_KEY TOKENBAR_OPENAI_API_KEY OPENAI_KEY TOKENBAR_OPENAI_KEY].any? { |name| !blank?(ENV[name]) }
+  end
+
+  def apply_codex_preflight_estimate!(input, options, config)
+    return nil unless input["agent"] == "codex"
+    return nil if options[:cost_explicit] && options[:tokens_explicit]
+
+    prompt = codex_preflight_prompt(options)
+    return nil if blank?(prompt)
+
+    model = input["model"] || default_model("openai")
+    pricing = codex_pricing_for(model, config)
+    estimate = estimate_codex_prompt_run(prompt, model, pricing, config)
+    input["estimatedTokens"] = estimate["estimatedTokens"] unless options[:tokens_explicit]
+    input["estimatedCost"] = estimate["estimatedCost"] unless options[:cost_explicit]
+    estimate
+  end
+
+  def codex_preflight_prompt(options)
+    return options[:prompt] unless blank?(options[:prompt])
+    return nil if blank?(options[:prompt_file])
+
+    Pathname.new(options[:prompt_file]).expand_path.read
+  rescue SystemCallError => e
+    raise Error, "could not read --prompt-file #{options[:prompt_file]}: #{e.message}"
+  end
+
+  def estimate_codex_prompt_run(prompt, model, pricing, config)
+    prompt_tokens = approximate_token_count(prompt)
+    size = codex_prompt_task_size(prompt, prompt_tokens, config)
+    size_estimate = CODEX_TASK_SIZE_ESTIMATES.fetch(size)
+    input_tokens = prompt_tokens + size_estimate[:base_input]
+    output_tokens = size_estimate[:output]
+    usage = {
+      "input_tokens" => input_tokens,
+      "cached_input_tokens" => 0,
+      "output_tokens" => output_tokens,
+      "total_tokens" => input_tokens + output_tokens
+    }
+    cost = estimate_codex_cost(usage, pricing)
+
+    {
+      "source" => "codex_prompt_heuristic",
+      "model" => model,
+      "taskSize" => size.to_s,
+      "promptTokens" => prompt_tokens,
+      "estimatedInputTokens" => input_tokens,
+      "estimatedOutputTokens" => output_tokens,
+      "estimatedTokens" => usage["total_tokens"],
+      "estimatedCost" => cost.round(6),
+      "pricingUSDPer1M" => {
+        "input" => pricing[:input].to_f,
+        "cachedInput" => pricing[:cached_input].to_f,
+        "output" => pricing[:output].to_f
+      }
+    }
+  end
+
+  def approximate_token_count(text)
+    normalized = text.to_s.gsub(/\s+/, " ").strip
+    return 0 if normalized.empty?
+
+    char_estimate = (normalized.length / CODEX_PROMPT_TOKEN_DIVISOR).ceil
+    word_estimate = (normalized.scan(/[[:alnum:]_]+/).length * 1.3).ceil
+    [char_estimate, word_estimate, 1].max
+  end
+
+  def codex_prompt_task_size(prompt, prompt_tokens, config)
+    configured = config&.dig("codex", "preflight_size") || config&.dig("codex", "preflightSize")
+    return configured.to_s.downcase.to_sym if CODEX_TASK_SIZE_ESTIMATES.key?(configured.to_s.downcase.to_sym)
+
+    text = prompt.to_s.downcase
+    return :xlarge if prompt_tokens >= 8_000 || text.match?(/\b(rewrite|rebuild|migrate|redesign|audit all|entire repo|full app|large refactor)\b/)
+    return :large if prompt_tokens >= 2_000 || text.match?(/\b(implement|refactor|verify|test|debug|fix|wire|integrate|frontend|ui|deploy|docs|examples)\b/)
+    return :small if prompt_tokens <= 80 && text.match?(/\b(explain|summarize|rename|format|translate|what is|show me)\b/)
+
+    :medium
+  end
+
   def codex_transcript_summary(path)
     raise Error, "missing Codex transcript path; pass --transcript or run from a Codex Stop hook" if blank?(path)
 
@@ -1083,7 +1217,7 @@ module TokenBarCLI
       reasons << "Estimated run cost is above the per-run cap."
     end
 
-    if workspace["requireCompanyKey"] && input["providerID"] == "openai"
+    if workspace["requireCompanyKey"] && company_key_required_but_unsatisfied?(input)
       status = "block"
       reasons << "Workspace requires a company-managed key."
     end
@@ -1115,6 +1249,7 @@ module TokenBarCLI
         },
         "provider" => input["providerID"],
         "model" => input["model"],
+        "keySource" => input["keySource"],
         "estimatedCost" => input["estimatedCost"].to_f,
         "projectedDailySpend" => projected_daily_spend,
         "reasons" => reasons,
@@ -1123,6 +1258,17 @@ module TokenBarCLI
         "timestamp" => Time.now.utc.iso8601
       }
     }
+  end
+
+  def company_key_required_but_unsatisfied?(input)
+    return false unless input["providerID"] == "openai"
+
+    !company_managed_key_source?(input["keySource"])
+  end
+
+  def company_managed_key_source?(source)
+    normalized = source.to_s.downcase.tr("-", "_")
+    %w[company company_managed managed codex_managed tokenbar_keychain tokenbar api_proxy org workspace].include?(normalized)
   end
 
   def offline_workspace(config, workspace_id)

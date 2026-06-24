@@ -162,10 +162,13 @@ TokenBar 在 `bin/tokenbar` 提供一个无额外依赖的本地 CLI。
 ./bin/tokenbar usage codex-session \
   --transcript ~/.codex/sessions/2026/06/17/rollout-example.jsonl
 
+printf '{"model":"gpt-5","prompt":"Fix the failing tests and update docs."}' | \
+  ./bin/tokenbar check --agent codex --provider openai --codex-hook-json --json
+
 ./bin/tokenbar usage claude-statusline
 ```
 
-CLI 会优先调用运行中 app 的认证 `POST /policy/evaluate` 端点。如果 app 没有运行，它会从当前目录向上查找 `tokenbar.yml` 或 `tokenbar.yaml`，并在本地评估同一份工作区策略。
+CLI 会优先调用运行中 app 的认证 `POST /policy/evaluate` 端点。如果 app 没有运行，它会从当前目录向上查找 `tokenbar.yml` 或 `tokenbar.yaml`，并在本地评估同一份工作区策略。Codex 预检可以用 `tokenbar check --codex-hook-json` 从 stdin 读取 `UserPromptSubmit` payload，并在评估策略前根据 prompt、model 和 Codex 价格表补齐缺失的成本和 token 估算。
 
 这个离线路径刻意保持窄而稳定：供应商 allowlist、被阻断的模型关键词、单次运行成本上限、每日预算投影和公司 Key 要求都会与当前 `PolicyEngine` 保持一致。
 
@@ -290,15 +293,31 @@ hook init 会使用 `examples/hooks/` 里的 shell 脚本写入 `.codex/hooks.js
 | Codex | `UserPromptSubmit` 在运行前调用 `tokenbar check`。 | `Stop` 读取 Codex transcript JSONL，并发送累计 session 用量。 |
 | Claude Code | `UserPromptSubmit` 在运行前调用 `tokenbar check`。 | `statusLine` 发送可识别的 cost、token、context-window 和 rate-limit 字段。 |
 
-两个 shell hook 都接受这些环境变量覆盖：
+Codex 的预检 hook 默认会根据提交的 prompt 和 model 估算一次运行，而不是发送 0 成本和 0 token。这个启发式估算会使用 prompt 长度、任务关键词、保守的 Codex 输入/输出预算，以及 `tokenbar usage codex-session` 同一套价格覆盖逻辑。两个 shell hook 都接受这些环境变量覆盖：
 
 ```bash
 TOKENBAR_BIN=/absolute/path/to/tokenbar
 TOKENBAR_PROVIDER=anthropic
 TOKENBAR_MODEL=claude-sonnet
+TOKENBAR_KEY_SOURCE=company_managed
 TOKENBAR_ESTIMATED_COST=0.25
 TOKENBAR_ESTIMATED_TOKENS=20000
 TOKENBAR_INTENT=refactor
+```
+
+Codex `UserPromptSubmit` 里，`TOKENBAR_PROVIDER`、`TOKENBAR_MODEL`、`TOKENBAR_ESTIMATED_COST`、`TOKENBAR_ESTIMATED_TOKENS` 都是可选的。Codex 只提供 prompt 而没有估算值时，hook 会把 JSON payload 管道传给 `tokenbar check --codex-hook-json`；CLI 会根据 prompt、model 和 Codex pricing 做一个保守估算，把 key source 标记为 `codex_managed`，再执行正常 workspace policy。若你明确希望 company-key workspace 拒绝个人/env OpenAI key，请设置 `TOKENBAR_KEY_SOURCE=personal` 或传 `--key-source personal`。
+
+手动检查 Codex 任务时，也可以直接传入 prompt：
+
+```bash
+./bin/tokenbar check \
+  --agent codex \
+  --provider openai \
+  --model gpt-5 \
+  --key-source codex_managed \
+  --prompt "Implement the parser, update docs, and run tests." \
+  --intent implement \
+  --json
 ```
 
 ## 本地用量摄取
@@ -414,6 +433,7 @@ verifier 会运行 TokenBar 内置的 `--tokenbar-verify-local-api` 路径，不
 ./bin/tokenbar status
 ./bin/tokenbar usage ingest --agent claudeCode --provider anthropic --model claude-sonnet --session-id smoke --cost-usd 0.12 --total-tokens 24000 --json
 ./bin/tokenbar usage codex-session --transcript /path/to/codex-rollout.jsonl --json
+printf '{"model":"gpt-5","prompt":"Implement the CLI preflight estimate and verify the hook."}' | ./bin/tokenbar check --agent codex --provider openai --codex-hook-json --intent implement --json
 ./bin/tokenbar check --agent codex --provider anthropic --model claude-sonnet --estimated-cost 0.20 --estimated-tokens 12000 --intent debug
 ./bin/tokenbar check --agent claudeCode --provider anthropic --model claude-opus --estimated-cost 2.40 --estimated-tokens 180000 --intent refactor
 ```

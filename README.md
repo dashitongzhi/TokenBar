@@ -162,10 +162,13 @@ TokenBar includes a dependency-free local CLI at `bin/tokenbar`.
 ./bin/tokenbar usage codex-session \
   --transcript ~/.codex/sessions/2026/06/17/rollout-example.jsonl
 
+printf '{"model":"gpt-5","prompt":"Fix the failing tests and update docs."}' | \
+  ./bin/tokenbar check --agent codex --provider openai --codex-hook-json --json
+
 ./bin/tokenbar usage claude-statusline
 ```
 
-The CLI first calls the running app's authenticated `POST /policy/evaluate` endpoint. If the app is not running, it searches upward from the current directory for `tokenbar.yml` or `tokenbar.yaml` and evaluates the same workspace policy locally.
+The CLI first calls the running app's authenticated `POST /policy/evaluate` endpoint. If the app is not running, it searches upward from the current directory for `tokenbar.yml` or `tokenbar.yaml` and evaluates the same workspace policy locally. For Codex preflight, `tokenbar check --codex-hook-json` can read a `UserPromptSubmit` payload from stdin and fill missing cost/tokens from the prompt, model, and Codex pricing table before the policy is evaluated.
 
 That offline path is intentionally narrow and predictable: provider allowlists, blocked model substrings, per-run cost caps, daily budget projection, and company-key requirements mirror the current `PolicyEngine`.
 
@@ -290,15 +293,31 @@ Hook init writes `.codex/hooks.json` and/or `.claude/settings.local.json` using 
 | Codex | `UserPromptSubmit` calls `tokenbar check` before the run. | `Stop` reads the Codex transcript JSONL and sends cumulative session usage. |
 | Claude Code | `UserPromptSubmit` calls `tokenbar check` before the run. | `statusLine` sends recognized cost, token, context-window, and rate-limit fields. |
 
-Both shell hooks accept environment overrides:
+Codex's preflight hook estimates a run by default from the submitted prompt and model instead of sending zero cost/tokens. The heuristic uses prompt length, task keywords, conservative Codex input/output budgets, and the same pricing overrides used by `tokenbar usage codex-session`. Both shell hooks accept environment overrides:
 
 ```bash
 TOKENBAR_BIN=/absolute/path/to/tokenbar
 TOKENBAR_PROVIDER=anthropic
 TOKENBAR_MODEL=claude-sonnet
+TOKENBAR_KEY_SOURCE=company_managed
 TOKENBAR_ESTIMATED_COST=0.25
 TOKENBAR_ESTIMATED_TOKENS=20000
 TOKENBAR_INTENT=refactor
+```
+
+For Codex `UserPromptSubmit`, `TOKENBAR_PROVIDER`, `TOKENBAR_MODEL`, `TOKENBAR_ESTIMATED_COST`, and `TOKENBAR_ESTIMATED_TOKENS` are optional. When Codex supplies a prompt but not an estimate, the hook pipes the JSON payload to `tokenbar check --codex-hook-json`; the CLI estimates prompt tokens and likely run cost, marks the key source as `codex_managed`, and then evaluates normal workspace policy. Set `TOKENBAR_KEY_SOURCE=personal` or pass `--key-source personal` when you intentionally want a company-key workspace to reject an OpenAI run using a personal/env key.
+
+For manual Codex checks you can pass prompt text directly:
+
+```bash
+./bin/tokenbar check \
+  --agent codex \
+  --provider openai \
+  --model gpt-5 \
+  --key-source codex_managed \
+  --prompt "Implement the parser, update docs, and run tests." \
+  --intent implement \
+  --json
 ```
 
 ## Local Usage Ingestion
@@ -414,6 +433,7 @@ Run CLI smoke checks:
 ./bin/tokenbar status
 ./bin/tokenbar usage ingest --agent claudeCode --provider anthropic --model claude-sonnet --session-id smoke --cost-usd 0.12 --total-tokens 24000 --json
 ./bin/tokenbar usage codex-session --transcript /path/to/codex-rollout.jsonl --json
+printf '{"model":"gpt-5","prompt":"Implement the CLI preflight estimate and verify the hook."}' | ./bin/tokenbar check --agent codex --provider openai --codex-hook-json --intent implement --json
 ./bin/tokenbar check --agent codex --provider anthropic --model claude-sonnet --estimated-cost 0.20 --estimated-tokens 12000 --intent debug
 ./bin/tokenbar check --agent claudeCode --provider anthropic --model claude-opus --estimated-cost 2.40 --estimated-tokens 180000 --intent refactor
 ```

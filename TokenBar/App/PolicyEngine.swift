@@ -30,7 +30,7 @@ struct PolicyEngine {
             reasons.append("Estimated run cost is above the per-run cap.")
         }
 
-        if workspace.requireCompanyKey && input.providerID == "openai" {
+        if workspace.requireCompanyKey && companyKeyRequiredButUnsatisfied(input) {
             status = .block
             reasons.append("Workspace requires a company-managed key.")
         }
@@ -89,5 +89,26 @@ struct PolicyEngine {
             return "a cheaper allowed provider"
         }
         return provider.name
+    }
+
+    private static func companyKeyRequiredButUnsatisfied(_ input: PolicyEvaluationInput) -> Bool {
+        guard input.providerID == "openai" else { return false }
+        return companyManagedKeySources.contains(normalizedKeySource(input.keySource)) == false
+    }
+
+    private static let companyManagedKeySources: Set<String> = [
+        "company",
+        "company_managed",
+        "managed",
+        "codex_managed",
+        "tokenbar_keychain",
+        "tokenbar",
+        "api_proxy",
+        "org",
+        "workspace"
+    ]
+
+    private static func normalizedKeySource(_ source: String?) -> String {
+        (source ?? "").lowercased().replacingOccurrences(of: "-", with: "_")
     }
 }

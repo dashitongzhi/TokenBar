@@ -2,28 +2,40 @@
 set -u
 
 INPUT="$(cat)"
-MODEL="$(
-  ruby -rjson -e 'payload = JSON.parse(ARGF.read) rescue {}; puts(payload["model"].to_s)' <<<"$INPUT"
-)"
-PROMPT="$(
-  ruby -rjson -e 'payload = JSON.parse(ARGF.read) rescue {}; puts(payload["prompt"].to_s)' <<<"$INPUT"
-)"
 
 TOKENBAR_BIN="${TOKENBAR_BIN:-tokenbar}"
-PROVIDER="${TOKENBAR_PROVIDER:-openai}"
-MODEL="${TOKENBAR_MODEL:-${MODEL:-gpt-5}}"
-ESTIMATED_COST="${TOKENBAR_ESTIMATED_COST:-0}"
-ESTIMATED_TOKENS="${TOKENBAR_ESTIMATED_TOKENS:-0}"
+PROVIDER="${TOKENBAR_PROVIDER:-}"
+MODEL="${TOKENBAR_MODEL:-}"
 INTENT="${TOKENBAR_INTENT:-codex_prompt}"
+CHECK_ARGS=(
+  check
+  --agent codex
+  --codex-hook-json
+  --intent "$INTENT"
+  --json
+)
 
-OUTPUT="$("$TOKENBAR_BIN" check \
-  --agent codex \
-  --provider "$PROVIDER" \
-  --model "$MODEL" \
-  --estimated-cost "$ESTIMATED_COST" \
-  --estimated-tokens "$ESTIMATED_TOKENS" \
-  --intent "$INTENT" \
-  --json 2>&1)"
+if [[ -n "$PROVIDER" ]]; then
+  CHECK_ARGS+=(--provider "$PROVIDER")
+fi
+
+if [[ -n "$MODEL" ]]; then
+  CHECK_ARGS+=(--model "$MODEL")
+fi
+
+if [[ -n "${TOKENBAR_KEY_SOURCE:-}" ]]; then
+  CHECK_ARGS+=(--key-source "$TOKENBAR_KEY_SOURCE")
+fi
+
+if [[ -n "${TOKENBAR_ESTIMATED_COST:-}" ]]; then
+  CHECK_ARGS+=(--estimated-cost "$TOKENBAR_ESTIMATED_COST")
+fi
+
+if [[ -n "${TOKENBAR_ESTIMATED_TOKENS:-}" ]]; then
+  CHECK_ARGS+=(--estimated-tokens "$TOKENBAR_ESTIMATED_TOKENS")
+fi
+
+OUTPUT="$(printf "%s" "$INPUT" | "$TOKENBAR_BIN" "${CHECK_ARGS[@]}" 2>&1)"
 STATUS=$?
 
 case "$STATUS" in

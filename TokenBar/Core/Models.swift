@@ -668,6 +668,7 @@ struct PolicyEvaluationInput: Codable, Equatable {
     var model: String
     var estimatedCost: Double
     var estimatedTokens: Int
+    var keySource: String? = nil
     var intent: String
 }
 
