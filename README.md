@@ -1,29 +1,148 @@
-# TokenBar
+<p align="center">
+  <img src="TokenBar/Assets.xcassets/AppIconMidnight.imageset/AppIconMidnight.png" alt="TokenBar app icon" width="96" height="96" />
+</p>
 
-TokenBar is a local policy guard for AI coding agents on macOS.
+<h1 align="center">TokenBar</h1>
 
-It helps developers stop expensive or unsafe agent runs before they happen: wrong project, wrong provider, wrong model, or a budget that is already too hot.
+<p align="center">
+  <strong>The local policy gate for AI coding agents on macOS.</strong>
+</p>
 
-## What It Does
+<p align="center">
+  Stop expensive, unsafe, or off-policy agent runs before they touch your repo, your provider quota, or your company key.
+</p>
 
-- Shows a menu bar policy decision: allow, warn, or block
-- Evaluates Claude Code, Codex, Cursor, Continue, or custom agent runs
-- Applies workspace policies by repo/client/project
-- Checks provider allowlists, blocked models, per-run caps, daily budgets, and company-key requirements
-- Exposes a loopback-only HTTP API on `127.0.0.1:3847` with bearer auth for non-health endpoints
-- Keeps API-key handling local and Keychain-oriented
-- Reads live OpenAI and Anthropic organization usage plus OpenRouter credits when keys are available
+<p align="center">
+  <a href="#quick-start"><img alt="Quick start" src="https://img.shields.io/badge/Quick%20Start-CLI%20%2B%20macOS-111827?style=for-the-badge&labelColor=0f172a"></a>
+  <a href="#local-api"><img alt="Local API" src="https://img.shields.io/badge/API-127.0.0.1%3A3847-2563eb?style=for-the-badge&labelColor=0f172a"></a>
+  <a href="#live-provider-usage"><img alt="Provider usage" src="https://img.shields.io/badge/Usage-OpenAI%20%7C%20Anthropic%20%7C%20OpenRouter%20%7C%20MiniMax-16a34a?style=for-the-badge&labelColor=0f172a"></a>
+  <a href="#release-packaging"><img alt="Release packaging" src="https://img.shields.io/badge/Packaging-DMG%20ready-7c3aed?style=for-the-badge&labelColor=0f172a"></a>
+</p>
 
-TokenBar is not trying to be another API key switcher. Tools like cc-switch are good at switching providers. TokenBar focuses on deciding whether the current agent run should proceed.
+<p align="center">
+  <a href="#why-tokenbar">Why TokenBar</a>
+  <span> | </span>
+  <a href="#how-it-works">How it works</a>
+  <span> | </span>
+  <a href="#quick-start">Quick start</a>
+  <span> | </span>
+  <a href="#local-api">Local API</a>
+  <span> | </span>
+  <a href="#agent-hooks">Agent hooks</a>
+  <span> | </span>
+  <a href="#development">Development</a>
+</p>
 
-## Early Product Flow
+<p align="center">
+  <strong>English</strong>
+  <span> | </span>
+  <a href="README.zh-CN.md">简体中文</a>
+</p>
 
-1. Pick the current agent, workspace, provider, model, estimated cost, and token count.
-2. TokenBar evaluates the run against the active workspace policy.
-3. The menu bar and dashboard show `ALLOW`, `WARN`, or `BLOCK`.
-4. External tools can call the local API before they launch a costly task.
+---
 
-## CLI Preflight
+## Why TokenBar
+
+AI coding tools moved faster than the guardrails around them.
+
+TokenBar is a menu bar control plane that decides whether an agent run should proceed. It reads workspace policy, local usage, live provider quota, and the proposed run metadata, then returns a clear `ALLOW`, `WARN`, or `BLOCK` decision before a costly task starts.
+
+It is not another API key switcher. Tools like `cc-switch` are good at routing providers. TokenBar focuses on the harder question:
+
+> Should this agent be allowed to run here, with this model, on this workspace, at this cost?
+
+## The Problem It Solves
+
+| Without TokenBar | With TokenBar |
+| --- | --- |
+| Agents can launch from the wrong repo or client workspace. | Workspace policies travel with the repo through `tokenbar.yml`. |
+| Cost caps live in someone's head or a billing dashboard opened too late. | The CLI and local API check budgets before the run starts. |
+| Provider usage is fragmented across OpenAI, Anthropic, OpenRouter, MiniMax, Codex, and local proxies. | TokenBar brings live and local usage into one menu bar surface. |
+| Claude Code and Codex hooks are hand-rolled per project. | `tokenbar policy init --hooks all` scaffolds working hook examples. |
+| Missing live data is often mistaken for zero spend. | TokenBar marks unknown spend, missing keys, and unsupported adapters explicitly. |
+
+## Product Surface
+
+| Layer | What it does |
+| --- | --- |
+| Menu bar guard | Shows the current policy decision and active workspace at a glance. |
+| Dashboard | Tracks provider usage, workspace budgets, source badges, audit events, and policy status. |
+| CLI preflight | Lets hooks and scripts call `tokenbar check` before launching an agent run. |
+| Local API | Exposes loopback-only policy, quota, pace, and usage endpoints on `127.0.0.1:3847`. |
+| Hook bridge | Connects Codex and Claude Code preflight plus usage ingestion into the same policy engine. |
+| Release path | Builds, verifies, signs ad-hoc for local validation, and packages a DMG. |
+
+## How It Works
+
+```text
+Agent request
+  -> tokenbar check
+  -> workspace policy
+  -> provider and model rules
+  -> budget projection
+  -> local and live usage context
+  -> ALLOW, WARN, or BLOCK
+```
+
+The decision engine evaluates:
+
+- Workspace, client, and project identity
+- Allowed providers and preferred provider
+- Blocked model substrings such as `opus` or `gpt-5-pro`
+- Per-run estimated cost and token caps
+- Daily and monthly budget projection
+- Company-key requirements
+- Local usage deltas from Claude Code and Codex
+- Live provider state when admin or provider keys are available
+
+## Quick Start
+
+Run the macOS app locally:
+
+```bash
+./script/build_and_run.sh
+```
+
+Verify the build and local API readiness path:
+
+```bash
+./script/build_and_run.sh --verify
+```
+
+Check the current project from the CLI:
+
+```bash
+./bin/tokenbar status
+```
+
+Create a repo-local policy:
+
+```bash
+./bin/tokenbar policy init
+```
+
+Evaluate a proposed agent run:
+
+```bash
+./bin/tokenbar check \
+  --agent claudeCode \
+  --provider anthropic \
+  --model claude-opus \
+  --estimated-cost 2.40 \
+  --estimated-tokens 180000 \
+  --intent refactor
+```
+
+`tokenbar check` exits with product-plan status codes:
+
+| Exit code | Meaning |
+| --- | --- |
+| `0` | Allow |
+| `1` | Warn |
+| `2` | Block |
+| `3` | CLI, config, or API error |
+
+## CLI Command Center
 
 TokenBar includes a dependency-free local CLI at `bin/tokenbar`.
 
@@ -40,52 +159,17 @@ TokenBar includes a dependency-free local CLI at `bin/tokenbar`.
   --cost-usd 0.12 \
   --total-tokens 24000
 
-./bin/tokenbar check \
-  --agent claudeCode \
-  --provider anthropic \
-  --model claude-opus \
-  --estimated-cost 2.40 \
-  --estimated-tokens 180000 \
-  --intent refactor
+./bin/tokenbar usage codex-session \
+  --transcript ~/.codex/sessions/2026/06/17/rollout-example.jsonl
+
+./bin/tokenbar usage claude-statusline
 ```
 
-`tokenbar check` returns the product-plan exit codes:
+The CLI first calls the running app's authenticated `POST /policy/evaluate` endpoint. If the app is not running, it searches upward from the current directory for `tokenbar.yml` or `tokenbar.yaml` and evaluates the same workspace policy locally.
 
-- `0`: allow
-- `1`: warn
-- `2`: block
-- `3`: CLI/config/API error
+That offline path is intentionally narrow and predictable: provider allowlists, blocked model substrings, per-run cost caps, daily budget projection, and company-key requirements mirror the current `PolicyEngine`.
 
-The CLI first calls the running app's authenticated `POST /policy/evaluate` endpoint on `http://127.0.0.1:3847`. It reads the local API bearer token from `TOKENBAR_API_TOKEN` or `~/Library/Application Support/TokenBar/local-api-token`, so hooks do not need to pass secrets manually. If the app is not running, it searches upward from the current directory for `tokenbar.yml` or `tokenbar.yaml` and evaluates the same workspace policy locally. If the app responds for a different workspace than the discovered config, the CLI also uses the local config instead of silently accepting the wrong workspace decision. That offline path is intentionally narrow: provider allowlists, blocked model substrings, per-run cost caps, daily budget projection, and company-key requirements mirror the current `PolicyEngine`.
-
-`tokenbar status` reports whether the local app API is reachable and which project config file will be used for offline checks.
-
-`tokenbar usage ingest` sends real local agent usage into the running app. The CLI enriches the usage payload with the nearest `tokenbar.yml` policy, so the app can upsert that workspace, update provider cards, and include local spend in later guard decisions. By default, usage values are treated as cumulative session totals and TokenBar de-duplicates them by `--session-id` or transcript path; pass `--event` when the cost/tokens represent a single event delta.
-
-Claude Code statusline ingestion is available as a one-line bridge:
-
-```bash
-tokenbar usage claude-statusline
-```
-
-Claude Code passes statusline JSON on stdin. TokenBar extracts the local session id, transcript path, model, cost, token, context-window, and rate-limit fields it recognizes, applies the same de-duplication ledger, and prints a compact statusline string unless `--json` is supplied.
-
-Codex local usage ingestion is available through Codex transcript JSONL files:
-
-```bash
-tokenbar usage codex-session --transcript ~/.codex/sessions/2026/06/17/rollout-example.jsonl
-```
-
-The Codex bridge reads the latest local `token_count` event, extracts cumulative session tokens, model, context window, cwd, and session id, estimates cumulative spend from model pricing, and posts the same `POST /usage/ingest` payload as other local agents. The app-side ledger applies only the delta since the last ingest for that session, so repeated Stop-hook calls do not double count. Pricing can be overridden with `TOKENBAR_CODEX_INPUT_USD_PER_1M`, `TOKENBAR_CODEX_CACHED_INPUT_USD_PER_1M`, and `TOKENBAR_CODEX_OUTPUT_USD_PER_1M`, or with a project config block:
-
-```yaml
-codex:
-  pricing:
-    gpt-5.5:
-      input_per_million: 1.25
-      cached_input_per_million: 0.125
-      output_per_million: 10.00
-```
+## Project Policy
 
 Use `tokenbar policy init` from a repo root to scaffold a project-local policy:
 
@@ -93,21 +177,9 @@ Use `tokenbar policy init` from a repo root to scaffold a project-local policy:
 tokenbar policy init
 ```
 
-It writes `./tokenbar.yml` with a workspace id/name inferred from the current directory, the current absolute path, conservative starter budgets, the provider allowlist consumed by `tokenbar check`, and blocked model substrings for high-cost model families. The generated file is immediately compatible with the CLI's offline evaluator and the app's current policy model: allowed providers, preferred provider, blocked models, per-run cap, daily/monthly budget fields, current spend fields, and company-key enforcement.
+It writes `./tokenbar.yml` with a workspace id and name inferred from the current directory, the absolute path, conservative starter budgets, provider allowlists, blocked high-cost model families, and company-key enforcement.
 
-To also wire project hooks:
-
-```bash
-tokenbar policy init --hooks all
-tokenbar policy init --codex-hooks
-tokenbar policy init --claude-hooks
-```
-
-Hook init writes `.codex/hooks.json` and/or `.claude/settings.local.json` using the working shell scripts in `examples/hooks/`. Existing files are left untouched unless you pass `--force`, so merge manually when a project already has hooks. The generated Codex config includes both the `UserPromptSubmit` policy preflight and a `Stop` hook that sends local Codex transcript usage into TokenBar.
-
-### `tokenbar.yml`
-
-Project-level policy files use the shape from `docs/PROJECT_PLAN.md`:
+Example:
 
 ```yaml
 version: 1
@@ -138,11 +210,17 @@ models:
     - gpt-5-pro
 ```
 
-The repo includes its own `tokenbar.yml`, so you can dogfood the offline flow immediately.
-
 ## Local API
 
-The local API binds to loopback only. `GET /health` is intentionally unauthenticated for readiness checks; every policy, quota, pace, or usage endpoint requires `Authorization: Bearer <local-token>`. The app creates the token at `~/Library/Application Support/TokenBar/local-api-token` with user-only file permissions, and the CLI reads it automatically. Browser CORS responses are restricted to localhost origins; TokenBar does not emit `Access-Control-Allow-Origin: *`.
+The local API binds to loopback only. `GET /health` is intentionally unauthenticated for readiness checks. Every policy, quota, pace, or usage endpoint requires `Authorization: Bearer <local-token>`.
+
+The app creates the token at:
+
+```text
+~/Library/Application Support/TokenBar/local-api-token
+```
+
+The token file is written with user-only permissions, and the CLI reads it automatically. Browser CORS responses are restricted to localhost origins. TokenBar does not emit `Access-Control-Allow-Origin: *`.
 
 ```bash
 curl http://127.0.0.1:3847/health
@@ -156,7 +234,7 @@ curl http://127.0.0.1:3847/quotas/anthropic \
   -H "Authorization: Bearer $TOKENBAR_API_TOKEN"
 ```
 
-Evaluate a proposed agent run:
+Evaluate a proposed run through the API:
 
 ```bash
 curl -X POST http://127.0.0.1:3847/policy/evaluate \
@@ -193,7 +271,39 @@ Example response:
 }
 ```
 
-Ingest local agent usage:
+## Agent Hooks
+
+Working hook examples live in `examples/hooks/`.
+
+Fast setup:
+
+```bash
+tokenbar policy init --hooks all
+tokenbar policy init --codex-hooks
+tokenbar policy init --claude-hooks
+```
+
+Hook init writes `.codex/hooks.json` and/or `.claude/settings.local.json` using the shell scripts in `examples/hooks/`. Existing files are left untouched unless you pass `--force`, so projects with custom hooks can merge manually.
+
+| Agent | Preflight | Usage ingestion |
+| --- | --- | --- |
+| Codex | `UserPromptSubmit` calls `tokenbar check` before the run. | `Stop` reads the Codex transcript JSONL and sends cumulative session usage. |
+| Claude Code | `UserPromptSubmit` calls `tokenbar check` before the run. | `statusLine` sends recognized cost, token, context-window, and rate-limit fields. |
+
+Both shell hooks accept environment overrides:
+
+```bash
+TOKENBAR_BIN=/absolute/path/to/tokenbar
+TOKENBAR_PROVIDER=anthropic
+TOKENBAR_MODEL=claude-sonnet
+TOKENBAR_ESTIMATED_COST=0.25
+TOKENBAR_ESTIMATED_TOKENS=20000
+TOKENBAR_INTENT=refactor
+```
+
+## Local Usage Ingestion
+
+Send real local agent usage into the running app:
 
 ```bash
 curl -X POST http://127.0.0.1:3847/usage/ingest \
@@ -213,60 +323,66 @@ curl -X POST http://127.0.0.1:3847/usage/ingest \
   }'
 ```
 
-Direct Claude Code statusline JSON can also be posted to `POST /usage/claude-statusline`, but the CLI bridge is preferred because it attaches the nearest `tokenbar.yml` policy before ingestion.
+By default, usage values are treated as cumulative session totals. TokenBar de-duplicates deltas by `--session-id` or transcript path, so repeated hook calls do not double count.
 
-## Agent Hook Examples
-
-Working hook examples live in `examples/hooks/`.
-
-For the fastest setup, run `tokenbar policy init --codex-hooks` or `tokenbar policy init --hooks all` from the target repo. To wire it manually, copy or adapt `examples/hooks/codex-hooks.json` into `.codex/hooks.json`. Codex discovers project hooks from `.codex/hooks.json` or inline `.codex/config.toml` hook tables. The TokenBar example uses `UserPromptSubmit` for preflight policy and `Stop` for transcript-backed usage ingestion. See the [Codex hooks docs](https://developers.openai.com/codex/hooks).
-
-For Claude Code, run `tokenbar policy init --claude-hooks` or merge `examples/hooks/claude-settings.example.json` into `.claude/settings.json` or `.claude/settings.local.json`. Claude Code `UserPromptSubmit` hooks can return a top-level `decision: "block"` with a `reason`, which the TokenBar example emits when `tokenbar check` returns `2`. See the [Claude Code hooks docs](https://docs.anthropic.com/en/docs/claude-code/hooks).
-
-Both shell hooks accept these environment overrides:
+Codex pricing can be overridden with environment variables:
 
 ```bash
-TOKENBAR_BIN=/absolute/path/to/tokenbar
-TOKENBAR_PROVIDER=anthropic
-TOKENBAR_MODEL=claude-sonnet
-TOKENBAR_ESTIMATED_COST=0.25
-TOKENBAR_ESTIMATED_TOKENS=20000
-TOKENBAR_INTENT=refactor
+TOKENBAR_CODEX_INPUT_USD_PER_1M=1.25
+TOKENBAR_CODEX_CACHED_INPUT_USD_PER_1M=0.125
+TOKENBAR_CODEX_OUTPUT_USD_PER_1M=10.00
 ```
 
-For Codex usage ingestion, keep the generated `Stop` hook or run the helper directly with Codex hook JSON on stdin:
+Or through project config:
 
-```bash
-TOKENBAR_BIN=/absolute/path/to/tokenbar examples/hooks/codex-tokenbar-stop.sh
-```
-
-For Claude Code statusline ingestion, merge the `statusLine` block from `examples/hooks/claude-settings.example.json` or run the helper directly:
-
-```bash
-TOKENBAR_BIN=/absolute/path/to/tokenbar examples/hooks/claude-tokenbar-statusline.sh
+```yaml
+codex:
+  pricing:
+    gpt-5.5:
+      input_per_million: 1.25
+      cached_input_per_million: 0.125
+      output_per_million: 10.00
 ```
 
 ## Live Provider Usage
 
-TokenBar supports live provider usage for:
+TokenBar supports live or local usage signals from:
 
-- OpenAI organization usage and cost APIs with `OPENAI_ADMIN_KEY` or `TOKENBAR_OPENAI_ADMIN_KEY`
-- Anthropic Usage and Cost Admin API with `ANTHROPIC_ADMIN_KEY` or `TOKENBAR_ANTHROPIC_ADMIN_KEY`
-- OpenRouter Credits API with `OPENROUTER_API_KEY` or `TOKENBAR_OPENROUTER_API_KEY`; `OPENROUTER_MANAGEMENT_KEY` and `TOKENBAR_OPENROUTER_MANAGEMENT_KEY` are also accepted as aliases
-- Codex login quota from the local `~/.codex/auth.json` session via ChatGPT's `/backend-api/wham/usage` endpoint
-- MiniMax Token Plan quota with `MINIMAX_API_KEY` or `TOKENBAR_MINIMAX_API_KEY`; TokenBar calls `GET https://api.minimaxi.com/v1/token_plan/remains` and surfaces both the current rolling window and weekly window
-- CC Switch local proxy rollups from `~/.cc-switch/cc-switch.db` for configured providers such as MiniMax, DeepSeek, Xiaomi MiMo, GLM, and CC Switch Codex
+| Provider or source | What TokenBar reads | Key or local state |
+| --- | --- | --- |
+| OpenAI | Organization usage and cost APIs | `OPENAI_ADMIN_KEY` or `TOKENBAR_OPENAI_ADMIN_KEY` |
+| Anthropic | Usage and Cost Admin API | `ANTHROPIC_ADMIN_KEY` or `TOKENBAR_ANTHROPIC_ADMIN_KEY` |
+| OpenRouter | Credits API | `OPENROUTER_API_KEY`, `TOKENBAR_OPENROUTER_API_KEY`, or management-key aliases |
+| Codex | Local login quota windows | `~/.codex/auth.json` |
+| MiniMax | Token Plan current and weekly quota windows | `MINIMAX_API_KEY` or `TOKENBAR_MINIMAX_API_KEY` |
+| CC Switch | Local proxy config, health, and rolling usage rollups | `~/.cc-switch/cc-switch.db` |
 
-Keys can be saved from Settings into the macOS Keychain, or supplied through the app environment. Anthropic live usage requires an Admin API key that starts with `sk-ant-admin`; standard Claude API keys are still useful for inference, but they do not authorize the organization usage and cost report endpoints. Anthropic currently supplies live token and cost buckets here; TokenBar marks message request counts and Claude Console subscription quotas as unknown instead of estimating them. OpenRouter live support calls `GET https://openrouter.ai/api/v1/credits` and uses the returned `total_credits` and `total_usage` values as a credit balance meter. OpenRouter does not expose token buckets, request counts, or period spend through that endpoint, so TokenBar marks those fields unknown instead of filling them with estimates. Codex live quota is separate from OpenAI organization usage: it uses the signed-in Codex/ChatGPT auth state on the local machine and reports the 5-hour and 7-day quota windows exposed by the Codex web backend. MiniMax Token Plan returns a current rolling window and a weekly window; TokenBar maps the current window to the main provider meter and includes weekly usage/reset details in the source text. CC Switch keys are read only in memory for optional provider checks such as DeepSeek balance, and are not imported into TokenBar Keychain.
+Keys can be saved from Settings into the macOS Keychain or supplied through the app environment.
 
-Provider source badges are deliberately literal:
+TokenBar is deliberately honest about source quality:
 
-- `Live`: TokenBar fetched provider data successfully.
-- `Local`: TokenBar ingested local agent usage, such as Claude Code statusline data or Codex transcript token counts. This is useful for provider cards and guard decisions, but it is not a provider-admin billing API.
-- `CC Switch`: TokenBar read local proxy config, health, and rolling usage rollups from the CC Switch sqlite database.
-- `Needs key`: the provider has a live adapter, but no usable admin key is available.
-- `Error`: the live adapter ran and the provider returned an error or unreadable response.
-- `Unsupported`: TokenBar has metadata for the provider, but no live adapter yet.
+| Badge | Meaning |
+| --- | --- |
+| `Live` | Provider data was fetched successfully. |
+| `Local` | Local agent usage was ingested from Claude Code or Codex. |
+| `CC Switch` | Local proxy config or rollups were read from the CC Switch sqlite database. |
+| `Needs key` | A live adapter exists, but no usable key is available. |
+| `Error` | The adapter ran, but the provider returned an error or unreadable response. |
+| `Unsupported` | Provider metadata exists, but no live adapter is implemented yet. |
+
+OpenRouter does not expose token buckets, request counts, or period spend through its credits endpoint. TokenBar marks those fields unknown instead of filling them with fake zeros. Anthropic organization usage requires an Admin API key that starts with `sk-ant-admin`; standard Claude API keys do not authorize the organization usage and cost report endpoints.
+
+## Security Model
+
+TokenBar is designed to be local-first:
+
+- The API binds to `127.0.0.1`, not the public network.
+- Non-health endpoints require a bearer token.
+- The local token lives under Application Support with user-only permissions.
+- Browser CORS is restricted to localhost origins.
+- Provider keys are read from environment or Keychain.
+- CC Switch keys are read only in memory and are not imported into TokenBar Keychain.
+- Unknown provider fields stay unknown instead of becoming misleading zero values.
 
 ## Development
 
@@ -276,19 +392,23 @@ Run the app locally:
 ./script/build_and_run.sh
 ```
 
-Verify build and the local API:
+Verify build and local API:
 
 ```bash
 ./script/build_and_run.sh --verify
 ```
 
-The verify mode builds `TokenBar.xcodeproj` with Xcode, stops any stale `TokenBar` process, temporarily enables the local API preference, then prepares an ad-hoc signed verifier copy of the freshly built TokenBar executable. That verifier runs TokenBar's built-in `--tokenbar-verify-local-api` path without depending on LaunchServices or a window session. The script waits up to 20 seconds for an actually started process, not a launch-suspended stub, that owns a listening socket on `127.0.0.1:3847` and returns the expected `{"status":"ok","service":"TokenBar"}` health payload. It restores the previous local API preference and stops the verifier process when the script exits. Set `TOKENBAR_VERIFY_TIMEOUT=<seconds>` to adjust the deadline.
+The verify mode builds `TokenBar.xcodeproj` with Xcode, stops any stale `TokenBar` process, temporarily enables the local API preference, then prepares an ad-hoc signed verifier copy of the freshly built executable.
+
+The verifier runs TokenBar's built-in `--tokenbar-verify-local-api` path without depending on LaunchServices or a window session. It waits for a real process that owns a listening socket on `127.0.0.1:3847` and returns:
+
+```json
+{"status":"ok","service":"TokenBar"}
+```
 
 `--verify` is a local API acceptance check, not a visual UI smoke test. Use the default `./script/build_and_run.sh` path when you need to launch the signed macOS app through LaunchServices.
 
-The script is wired into Codex through `.codex/environments/environment.toml`.
-
-Run the CLI smoke checks:
+Run CLI smoke checks:
 
 ```bash
 ./bin/tokenbar status
@@ -306,25 +426,31 @@ Create a local release DMG:
 ./script/package_release.sh
 ```
 
-The release script archives the macOS app, stages a drag-to-Applications DMG, and reports whether the artifact is ad-hoc, Developer ID signed, or notarized. It does not pretend signing or notarization are complete when Apple credentials are missing. The default local path uses ad-hoc signing for internal validation; public distribution still needs a Developer ID Application certificate plus notarization credentials.
+The release script archives the macOS app, stages a drag-to-Applications DMG, and reports whether the artifact is ad-hoc, Developer ID signed, or notarized. It does not pretend signing or notarization are complete when Apple credentials are missing.
 
 Run `./script/package_release.sh --help` for Developer ID and notarization inputs.
 
 ## Current Status
 
-This is a releaseable early product shell:
+TokenBar is a releaseable early product shell with:
 
-- Guard-first dashboard
-- Workspace policy cards
+- Guard-first macOS dashboard
 - Menu bar decision popover
-- Local API for agent preflight checks
-- CLI preflight with `tokenbar status`, `tokenbar check`, `tokenbar policy init`, upward `tokenbar.yml` lookup, and offline policy fallback
+- Workspace policy cards and durable policy storage
+- Loopback local API for agent preflight checks
+- Bearer-authenticated policy, quota, pace, and usage endpoints
+- CLI preflight with offline `tokenbar.yml` fallback
 - Working Codex and Claude Code hook examples
-- Claude Code statusline and Codex transcript local usage ingestion with session de-duplication and app workspace policy upsert
-- OpenAI organization usage and cost adapter with Keychain-backed admin key storage
-- Anthropic Usage and Cost Admin API adapter with matching Keychain-backed admin key storage
-- OpenRouter Credits API adapter with matching Keychain-backed API key storage
-- Provider source badges that distinguish live data, missing credentials, adapter errors, and unsupported providers
-- API monitor catalog retained as an integration surface
+- Claude Code statusline usage ingestion
+- Codex transcript usage ingestion with session de-duplication
+- OpenAI organization usage and cost adapter
+- Anthropic Usage and Cost Admin API adapter
+- OpenRouter Credits API adapter
+- MiniMax Token Plan quota adapter
+- Codex login quota adapter
+- CC Switch local proxy rollups
+- Keychain-backed provider key storage
+- Provider source badges that distinguish live data, missing credentials, adapter errors, local usage, and unsupported providers
+- Local release DMG packaging
 
-The next production step is adding more real adapters, such as provider-specific rate-limit headers and additional admin usage APIs.
+The next production step is adding more real adapters, provider-specific rate-limit headers, and additional admin usage APIs.
