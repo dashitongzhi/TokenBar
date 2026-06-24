@@ -1,0 +1,28 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "TOKENBAR_BIN=\"$(git rev-parse --show-toplevel)/bin/tokenbar\" \"$(git rev-parse --show-toplevel)/examples/hooks/codex-tokenbar-user-prompt-submit.sh\"",
+            "timeout": 10,
+            "statusMessage": "Checking TokenBar policy"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "TOKENBAR_BIN=\"$(git rev-parse --show-toplevel)/bin/tokenbar\" \"$(git rev-parse --show-toplevel)/examples/hooks/codex-tokenbar-stop.sh\"",
+            "timeout": 10,
+            "statusMessage": "Sending Codex usage to TokenBar"
+          }
+        ]
+      }
+    ]
+  }
+}

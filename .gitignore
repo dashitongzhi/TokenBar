@@ -7,6 +7,9 @@ DerivedData/
 # Local assistant/editor state.
 .claude/
 .codex/
+!.codex/
+.codex/*
+!.codex/hooks.json
 
 # Local notes and internal planning docs. README stays public.
 docs/
