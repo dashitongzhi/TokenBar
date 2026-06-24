@@ -307,6 +307,8 @@ TOKENBAR_INTENT=refactor
 
 Codex `UserPromptSubmit` 里，`TOKENBAR_PROVIDER`、`TOKENBAR_MODEL`、`TOKENBAR_ESTIMATED_COST`、`TOKENBAR_ESTIMATED_TOKENS` 都是可选的。Codex 只提供 prompt 而没有估算值时，hook 会把 JSON payload 管道传给 `tokenbar check --codex-hook-json`；CLI 会根据 prompt、model 和 Codex pricing 做一个保守估算，把 key source 标记为 `codex_managed`，再执行正常 workspace policy。若你明确希望 company-key workspace 拒绝个人/env OpenAI key，请设置 `TOKENBAR_KEY_SOURCE=personal` 或传 `--key-source personal`。
 
+也就是说，昂贵的 Codex prompt 可以在真正运行前被拦截：如果估算出的 prompt/run token 会换算成超过 `budgets.max_run` 的成本，或者让 projected daily spend 超过工作区预算，`UserPromptSubmit` 会返回 Codex block decision。TokenBar 默认闸门是基于成本策略，而不是独立的原始 token 数量上限；如果某个工作区需要“超过固定 token 数就一律拦截”，应再增加显式的 token cap policy。
+
 手动检查 Codex 任务时，也可以直接传入 prompt：
 
 ```bash

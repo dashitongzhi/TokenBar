@@ -307,6 +307,8 @@ TOKENBAR_INTENT=refactor
 
 For Codex `UserPromptSubmit`, `TOKENBAR_PROVIDER`, `TOKENBAR_MODEL`, `TOKENBAR_ESTIMATED_COST`, and `TOKENBAR_ESTIMATED_TOKENS` are optional. When Codex supplies a prompt but not an estimate, the hook pipes the JSON payload to `tokenbar check --codex-hook-json`; the CLI estimates prompt tokens and likely run cost, marks the key source as `codex_managed`, and then evaluates normal workspace policy. Set `TOKENBAR_KEY_SOURCE=personal` or pass `--key-source personal` when you intentionally want a company-key workspace to reject an OpenAI run using a personal/env key.
 
+This means expensive Codex prompts can be stopped before they run: if the estimated prompt/run tokens imply a cost above `budgets.max_run`, or push projected daily spend past the workspace budget, `UserPromptSubmit` returns a Codex block decision. TokenBar's default gate is cost-policy based, not a standalone raw-token ceiling; add an explicit policy rule if a workspace needs to block every run above a fixed token count.
+
 For manual Codex checks you can pass prompt text directly:
 
 ```bash
