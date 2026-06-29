@@ -19,6 +19,7 @@ LOCAL_API_PREF_VALUE=""
 LOCAL_API_PREF_REQUIRES_APP_STOP="0"
 VERIFY_APP_PID=""
 VERIFY_EXEC="$ROOT_DIR/.build/tokenbar-verify/$APP_NAME"
+VERIFY_ENTITLEMENTS="$ROOT_DIR/.build/tokenbar-verify.entitlements"
 VERIFY_STDOUT="$ROOT_DIR/.build/tokenbar-verify.stdout.log"
 VERIFY_STDERR="$ROOT_DIR/.build/tokenbar-verify.stderr.log"
 
@@ -239,7 +240,19 @@ open_verify_app() {
   rm -f "$VERIFY_EXEC"
   cp "$APP_BUNDLE/Contents/MacOS/$APP_NAME" "$VERIFY_EXEC"
   chmod +x "$VERIFY_EXEC"
-  codesign --force --sign - "$VERIFY_EXEC" >/dev/null 2>&1 || fail "failed to ad-hoc sign verifier executable"
+  cat > "$VERIFY_ENTITLEMENTS" <<'ENTITLEMENTS'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.network.client</key>
+  <true/>
+  <key>com.apple.security.network.server</key>
+  <true/>
+</dict>
+</plist>
+ENTITLEMENTS
+  codesign --force --sign - --entitlements "$VERIFY_ENTITLEMENTS" "$VERIFY_EXEC" >/dev/null 2>&1 || fail "failed to ad-hoc sign verifier executable"
 
   stage "Launching $APP_NAME local API verification mode"
   : > "$VERIFY_STDOUT"

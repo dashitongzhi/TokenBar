@@ -15,7 +15,10 @@ final class AppState: ObservableObject {
     }
 
     @Published var selectedProviderID: String {
-        didSet { savePreferencesAndNotify() }
+        didSet {
+            markExplicitSelection(\.hasExplicitSelectedProviderPreference)
+            savePreferencesAndNotify()
+        }
     }
 
     @Published var selectedMainSection: MainSection {
@@ -24,6 +27,7 @@ final class AppState: ObservableObject {
 
     @Published var selectedWorkspaceID: String {
         didSet {
+            markExplicitSelection(\.hasExplicitSelectedWorkspacePreference)
             rebuildPolicyInput()
             savePreferencesAndNotify()
         }
@@ -31,6 +35,7 @@ final class AppState: ObservableObject {
 
     @Published var selectedAgent: AgentProvider {
         didSet {
+            markExplicitSelection(\.hasExplicitSelectedAgentPreference)
             rebuildPolicyInput()
             savePreferencesAndNotify()
         }
@@ -38,6 +43,7 @@ final class AppState: ObservableObject {
 
     @Published var selectedModel: String {
         didSet {
+            markExplicitSelection(\.hasExplicitSelectedModelPreference)
             rebuildPolicyInput()
             savePreferencesAndNotify()
         }
@@ -94,7 +100,7 @@ final class AppState: ObservableObject {
         agent: .codex,
         workspaceID: "local-workspace",
         providerID: "openai",
-        model: "gpt-5",
+        model: "unspecified",
         estimatedCost: 0,
         estimatedTokens: 0,
         intent: "code"
@@ -106,11 +112,11 @@ final class AppState: ObservableObject {
         workspaceID: "local-workspace",
         workspaceName: "Local Workspace",
         providerID: "openai",
-        model: "gpt-5",
+        model: "unspecified",
         estimatedCost: 0,
         projectedDailySpend: 0,
         reasons: ["Workspace, provider, model, and budget are inside policy."],
-        recommendation: "Continue with gpt-5. Keep the agent on this workspace policy.",
+        recommendation: "Select a model before running an agent.",
         fallbackProviderID: "anthropic"
     )
     @Published private(set) var recentDecisions: [PolicyDecision] = []
@@ -142,6 +148,7 @@ final class AppState: ObservableObject {
     private var hasExplicitSelectedWorkspacePreference = false
     private var hasExplicitSelectedAgentPreference = false
     private var hasExplicitSelectedModelPreference = false
+    private var isApplyingInferredSelections = false
 
     private init() {
         let savedPreferences = preferencesStore.load()
@@ -706,10 +713,6 @@ final class AppState: ObservableObject {
     }
 
     private func savePreferencesAndNotify() {
-        hasExplicitSelectedProviderPreference = true
-        hasExplicitSelectedWorkspacePreference = true
-        hasExplicitSelectedAgentPreference = true
-        hasExplicitSelectedModelPreference = true
         preferencesStore.save(AppPreferencesSnapshot(
             language: language,
             statusBarContent: statusBarContent,
@@ -735,24 +738,32 @@ final class AppState: ObservableObject {
     }
 
     private func normalizeSelectionsAfterLoad() {
+        isApplyingInferredSelections = true
+        defer { isApplyingInferredSelections = false }
+
+        for providerID in workspacePolicies.flatMap(\.allowedProviderIDs) {
+            ensureProviderExists(providerID: providerID)
+        }
         if hasExplicitSelectedWorkspacePreference == false,
            let inferredWorkspace = workspacePolicies.first(where: { $0.preferredProviderID != nil || $0.preferredModel != nil }) {
             selectedWorkspaceID = inferredWorkspace.id
         }
         if providers.contains(where: { $0.id == selectedProviderID }) == false {
+            hasExplicitSelectedProviderPreference = false
             selectedProviderID = providers.first?.id ?? "openai"
         }
         if workspacePolicies.contains(where: { $0.id == selectedWorkspaceID }) == false {
+            hasExplicitSelectedWorkspacePreference = false
             selectedWorkspaceID = workspacePolicies.first?.id ?? "local-workspace"
-        }
-        for providerID in workspacePolicies.flatMap(\.allowedProviderIDs) {
-            ensureProviderExists(providerID: providerID)
         }
         if hasExplicitSelectedProviderPreference == false,
            let preferredProviderID = selectedWorkspace?.preferredProviderID,
            preferredProviderID.isEmpty == false {
             ensureProviderExists(providerID: preferredProviderID)
             selectedProviderID = preferredProviderID
+        }
+        if selectedModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            hasExplicitSelectedModelPreference = false
         }
         if hasExplicitSelectedModelPreference == false,
            let preferredModel = selectedWorkspace?.preferredModel,
@@ -766,6 +777,11 @@ final class AppState: ObservableObject {
             sessionSpend = 0
             focusModeEnabled = false
         }
+    }
+
+    private func markExplicitSelection(_ keyPath: ReferenceWritableKeyPath<AppState, Bool>) {
+        guard isApplyingInferredSelections == false else { return }
+        self[keyPath: keyPath] = true
     }
 
     private func notifyStatusBarUpdate() {

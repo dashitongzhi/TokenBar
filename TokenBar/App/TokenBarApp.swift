@@ -9,8 +9,14 @@ struct TokenBarApp: App {
         // Used by script/build_and_run.sh --verify to exercise LocalAPIServer without LaunchServices.
         if CommandLine.arguments.contains("--tokenbar-verify-local-api") {
             FileHandle.standardError.write(Data("TokenBar verify mode: starting local API\n".utf8))
-            AppState.shared.localAPIEnabled = true
-            AppState.shared.refreshAll()
+            let state = AppState.shared
+            let workspace = state.selectedWorkspace
+            FileHandle.standardError.write(Data("""
+            TokenBar verify mode: startup policy workspace=\(state.selectedWorkspaceID) model=\(state.selectedModel) estimated_cost=\(state.estimatedRunCost) estimated_tokens=\(Int(state.estimatedTokens)) session_budget=\(state.sessionBudget) workspace_daily_budget=\(workspace?.dailyBudget ?? 0) workspace_monthly_budget=\(workspace?.monthlyBudget ?? 0) per_run_cap=\(workspace?.maxEstimatedRunCost ?? 0)
+
+            """.utf8))
+            state.localAPIEnabled = true
+            state.refreshAll()
             LocalAPIServer.shared.syncWithPreference()
             RunLoop.main.run()
         }
