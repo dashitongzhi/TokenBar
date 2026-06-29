@@ -401,8 +401,10 @@ struct CCSwitchUsageService {
         if haystack.contains("deepseek") { return .deepSeek }
         if haystack.contains("minimax") || haystack.contains("mini-max") { return .miniMax }
         if haystack.contains("mimo") || haystack.contains("xiaomi") { return .xiaomiMiMo }
-        if rollup.appType == "codex" { return .ccSwitchCodex }
         if haystack.contains("glm") { return .glm }
+        if haystack.contains("kral") || haystack.contains("kralai") { return .kral }
+        if haystack.contains("anthropic") || haystack.contains("claude") { return .anthropic }
+        if rollup.appType == "codex" { return .ccSwitchCodex }
         return nil
     }
 
@@ -418,8 +420,10 @@ struct CCSwitchUsageService {
         if haystack.contains("deepseek") { return .deepSeek }
         if haystack.contains("minimax") || haystack.contains("mini-max") || haystack.contains("minimaxi") { return .miniMax }
         if haystack.contains("mimo") || haystack.contains("xiaomi") { return .xiaomiMiMo }
-        if record.appType == "codex" { return .ccSwitchCodex }
         if haystack.contains("glm") { return .glm }
+        if haystack.contains("kral") || haystack.contains("kralai") { return .kral }
+        if haystack.contains("anthropic") || haystack.contains("claude") { return .anthropic }
+        if record.appType == "codex" { return .ccSwitchCodex }
         return nil
     }
 
@@ -464,6 +468,8 @@ private nonisolated enum CCSwitchKnownProvider: Hashable {
     case xiaomiMiMo
     case ccSwitchCodex
     case glm
+    case kral
+    case anthropic
 
     var providerID: String {
         switch self {
@@ -472,6 +478,8 @@ private nonisolated enum CCSwitchKnownProvider: Hashable {
         case .xiaomiMiMo: "xiaomi-mimo"
         case .ccSwitchCodex: "ccswitch-codex"
         case .glm: "glm"
+        case .kral: "kral"
+        case .anthropic: "anthropic"
         }
     }
 
@@ -482,6 +490,8 @@ private nonisolated enum CCSwitchKnownProvider: Hashable {
         case .xiaomiMiMo: "Xiaomi MiMo"
         case .ccSwitchCodex: "CC Switch Codex"
         case .glm: "GLM"
+        case .kral: "Kral"
+        case .anthropic: "Anthropic"
         }
     }
 
@@ -492,6 +502,8 @@ private nonisolated enum CCSwitchKnownProvider: Hashable {
         case .xiaomiMiMo: "waveform.path.ecg"
         case .ccSwitchCodex: "terminal.fill"
         case .glm: "sparkle.magnifyingglass"
+        case .kral: "network"
+        case .anthropic: "text.bubble.fill"
         }
     }
 
@@ -502,6 +514,8 @@ private nonisolated enum CCSwitchKnownProvider: Hashable {
         case .xiaomiMiMo: 2
         case .ccSwitchCodex: 3
         case .glm: 4
+        case .kral: 5
+        case .anthropic: 6
         }
     }
 }
