@@ -32,9 +32,9 @@ jobs:
             let pr = context.payload.pull_request;
 
             if (!pr) {
-              const prNumber = Number(core.getInput("pr_number"));
+              const prNumber = Number(context.payload.inputs && context.payload.inputs.pr_number);
               if (!Number.isInteger(prNumber) || prNumber <= 0) {
-                throw new Error(`Invalid pr_number input: ${core.getInput("pr_number")}`);
+                throw new Error(`Invalid pr_number input: ${context.payload.inputs && context.payload.inputs.pr_number}`);
               }
               const response = await github.rest.pulls.get({
                 owner,
