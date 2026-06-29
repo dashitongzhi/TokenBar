@@ -11,7 +11,11 @@ struct MenuBarPopoverView: View {
                 VStack(spacing: 12) {
                     CompactDecisionView(decision: appState.currentDecision)
                     InsightPanel()
-                    FocusBudgetView(compact: true)
+                    if appState.focusModeEnabled || appState.sessionBudget > 0 {
+                        FocusBudgetView(compact: true)
+                    }
+                    CompactQuotaWindowView()
+                    CompactModelUsageView()
                     ForEach(appState.workspacePolicies.prefix(2)) { workspace in
                         CompactWorkspaceView(workspace: workspace)
                     }
@@ -26,9 +30,10 @@ struct MenuBarPopoverView: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            Image(systemName: "chart.bar.xaxis")
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(.tint)
+            Image("TokenBarGlyph")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 28, height: 26)
             VStack(alignment: .leading, spacing: 1) {
                 Text(appState.localized("app.title"))
                     .font(.headline)
@@ -126,15 +131,204 @@ struct CompactWorkspaceView: View {
                 Label(workspace.name, systemImage: "folder.fill")
                     .font(.subheadline.weight(.semibold))
                 Spacer()
-                Text("$\(appState.formatMoney(workspace.spendToday)) / $\(appState.formatMoney(workspace.dailyBudget))")
+                Text(budgetText)
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
-            ProgressView(value: min(workspace.dailyRatio, 1))
-                .tint(workspace.status.color)
+            if workspace.dailyBudget > 0 {
+                ProgressView(value: min(workspace.dailyRatio, 1))
+                    .tint(workspace.status.color)
+            }
         }
         .padding(12)
         .background(Color(nsColor: .controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var budgetText: String {
+        guard workspace.dailyBudget > 0 else { return appState.localized("noBudgetSet") }
+        return "$\(appState.formatMoney(workspace.spendToday)) / $\(appState.formatMoney(workspace.dailyBudget))"
+    }
+}
+
+struct CompactQuotaWindowView: View {
+    @EnvironmentObject private var appState: AppState
+
+    private var rows: [ProviderUsage] {
+        Array(appState.providers.filter { provider in
+            provider.sourceKind == .live || provider.sourceKind == .ccSwitch || provider.id == "codex" || provider.id == "minimax"
+        }.prefix(5))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label(appState.localized("quotaWindows"), systemImage: "gauge.with.dots.needle.50percent")
+                    .font(.headline)
+                Spacer()
+                Button {
+                    appState.refreshAll()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(.borderless)
+                .help(appState.localized("refresh"))
+            }
+
+            if rows.isEmpty {
+                Text(appState.localized("quotaWindowsEmpty"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                ForEach(rows) { provider in
+                    QuotaWindowRow(provider: provider)
+                }
+            }
+        }
+        .padding(12)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+private struct QuotaWindowRow: View {
+    @EnvironmentObject private var appState: AppState
+    var provider: ProviderUsage
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: provider.symbolName)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(provider.status.color)
+                .frame(width: 18)
+
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(provider.name)
+                        .font(.caption.weight(.semibold))
+                    SourcePill(source: provider.sourceKind)
+                        .scaleEffect(0.84, anchor: .leading)
+                }
+                Text(provider.sourceDescription.isEmpty ? appState.localized("noLiveQuotaYet") : provider.sourceDescription)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+
+            Spacer(minLength: 8)
+
+            Text(metricText)
+                .font(.caption.monospacedDigit().weight(.semibold))
+                .foregroundStyle(provider.status.color)
+        }
+        .padding(.vertical, 2)
+    }
+
+    private var metricText: String {
+        if provider.hasKnownQuotaLimit {
+            if provider.unit == "percent" {
+                return "\(Int(provider.current))%"
+            }
+            if provider.unit == "credits" {
+                return appState.formatMoney(provider.current)
+            }
+            return "\(Int(provider.current))"
+        }
+        if provider.todayTokenCount > 0 {
+            return "\(Int(provider.todayTokenCount)) tok"
+        }
+        return "-"
+    }
+}
+
+struct CompactModelUsageView: View {
+    @EnvironmentObject private var appState: AppState
+
+    private var rows: [ModelUsageRollup] {
+        Array(appState.visibleModelUsageRollups.prefix(5))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label(appState.localized("modelUsage"), systemImage: "cpu")
+                    .font(.headline)
+                Spacer()
+                Text(appState.localized("today"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if rows.isEmpty {
+                Text(appState.localized("modelUsageEmpty"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                ForEach(rows) { row in
+                    ModelUsageRow(row: row)
+                }
+            }
+        }
+        .padding(12)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+private struct ModelUsageRow: View {
+    @EnvironmentObject private var appState: AppState
+    var row: ModelUsageRollup
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: row.agent.symbolName)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(row.hasUsage ? Color.accentColor : .secondary)
+                .frame(width: 18)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(row.model)
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text(subtitle)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 8)
+
+            VStack(alignment: .trailing, spacing: 3) {
+                Text(primaryMetric)
+                    .font(.caption.monospacedDigit().weight(.semibold))
+                Text(secondaryMetric)
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    private var subtitle: String {
+        let provider = appState.providers.first { $0.id == row.providerID }?.name ?? row.providerID
+        let source = row.source == .configured ? appState.localized("configuredModel") : appState.localized("localUsage")
+        return "\(row.agent.displayName) · \(provider) · \(source)"
+    }
+
+    private var primaryMetric: String {
+        row.hasUsage ? "$\(appState.formatMoney(row.spendToday))" : "-"
+    }
+
+    private var secondaryMetric: String {
+        if row.tokensToday > 0 {
+            return "\(Int(row.tokensToday)) tok"
+        }
+        if row.source == .configured {
+            return appState.localized("configured")
+        }
+        return "-"
     }
 }

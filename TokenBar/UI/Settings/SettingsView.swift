@@ -64,8 +64,8 @@ private struct GeneralSettingsView: View {
                 Toggle(appState.localized("focusMode"), isOn: $appState.focusModeEnabled)
                 HStack {
                     Text(appState.localized("sessionBudget"))
-                    Slider(value: $appState.sessionBudget, in: 1...50, step: 1)
-                    Text("$\(Int(appState.sessionBudget))")
+                    Slider(value: $appState.sessionBudget, in: 0...50, step: 1)
+                    Text(appState.sessionBudget > 0 ? "$\(Int(appState.sessionBudget))" : appState.localized("off"))
                         .monospacedDigit()
                         .frame(width: 52, alignment: .trailing)
                 }
@@ -169,6 +169,8 @@ private struct PlatformSettingsView: View {
 
             LiveProviderCredentialPanels()
 
+            ModelCatalogSettingsPreview()
+
             List {
                 Section(appState.localized("platforms")) {
                     ForEach(appState.providers) { provider in
@@ -205,5 +207,55 @@ private struct PlatformSettingsView: View {
             }
         }
         .padding()
+    }
+}
+
+private struct ModelCatalogSettingsPreview: View {
+    @EnvironmentObject private var appState: AppState
+
+    private var rows: [ModelCatalogItem] {
+        Array(appState.modelCatalogItems.prefix(8))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label(appState.localized("modelCatalog"), systemImage: "list.bullet.rectangle")
+                    .font(.headline)
+                Spacer()
+                Button {
+                    appState.refreshModelCatalog()
+                } label: {
+                    Label(appState.localized("pullModels"), systemImage: "arrow.down.circle")
+                }
+                .disabled(appState.isRefreshingModelCatalog)
+            }
+
+            Text(appState.modelCatalogMessage.isEmpty ? appState.localized("modelCatalogHelp") : appState.modelCatalogMessage)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if rows.isEmpty == false {
+                ForEach(rows) { row in
+                    HStack(spacing: 8) {
+                        Text(row.modelID)
+                            .font(.caption.weight(.medium))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer()
+                        Text(row.providerID)
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.secondary)
+                        Text(row.source.rawValue)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 }

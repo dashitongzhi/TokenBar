@@ -23,10 +23,61 @@ struct CCSwitchProviderUsageSnapshot: Equatable {
     var requestCountMonth: Int
     var spendToday: Double
     var spendMonth: Double
+    var dailySpendLimit: Double?
+    var monthlySpendLimit: Double?
     var monthResetAt: Date
+    var quotaWindows: [CCSwitchQuotaWindow]
     var history: [UsagePoint]
     var sourceDetail: String
     var fetchedAt: Date
+}
+
+struct CCSwitchQuotaWindow: Equatable {
+    var providerID: String
+    var providerDisplayName: String
+    var modelName: String
+    var intervalUsedCount: Double
+    var intervalTotalCount: Double
+    var intervalUsedPercent: Double
+    var intervalRemainingPercent: Double?
+    var intervalStartAt: Date
+    var intervalResetAt: Date
+    var weeklyUsedCount: Double
+    var weeklyTotalCount: Double
+    var weeklyUsedPercent: Double
+    var weeklyRemainingPercent: Double?
+    var weeklyStartAt: Date
+    var weeklyResetAt: Date
+
+    var hasKnownIntervalLimit: Bool {
+        intervalTotalCount > 0 || intervalRemainingPercent != nil
+    }
+
+    var hasKnownWeeklyLimit: Bool {
+        weeklyTotalCount > 0 || weeklyRemainingPercent != nil
+    }
+
+    var intervalWindowLabel: String {
+        Self.windowLabel(from: intervalStartAt, to: intervalResetAt)
+    }
+
+    var weeklyWindowLabel: String {
+        Self.windowLabel(from: weeklyStartAt, to: weeklyResetAt)
+    }
+
+    private static func windowLabel(from start: Date, to end: Date) -> String {
+        let seconds = max(end.timeIntervalSince(start), 0)
+        if seconds >= 86_400 {
+            let days = max(Int(round(seconds / 86_400)), 1)
+            return days == 1 ? "1-day window" : "\(days)-day window"
+        }
+        if seconds >= 3_600 {
+            let hours = max(Int(round(seconds / 3_600)), 1)
+            return hours == 1 ? "1-hour window" : "\(hours)-hour window"
+        }
+        let minutes = max(Int(round(seconds / 60)), 1)
+        return minutes == 1 ? "1-minute window" : "\(minutes)-minute window"
+    }
 }
 
 struct CCSwitchUsageService {
@@ -35,7 +86,7 @@ struct CCSwitchUsageService {
 
     init(
         fileManager: FileManager = .default,
-        databaseURL: URL = FileManager.default.homeDirectoryForCurrentUser
+        databaseURL: URL = UserHomeDirectory.url
             .appendingPathComponent(".cc-switch/cc-switch.db")
     ) {
         self.fileManager = fileManager
@@ -57,18 +108,50 @@ struct CCSwitchUsageService {
             let providerRecords = try reader.providerRecords()
             let rollups = try reader.dailyRollups(since: Self.rollingStartString())
             let health = try reader.providerHealth()
-            let deepSeekBalance = await deepSeekBalance(from: providerRecords)
+            async let deepSeekBalance = deepSeekBalance(from: providerRecords)
+            async let quotaWindows = liveQuotaWindows(from: providerRecords)
             let snapshot = Self.buildSnapshot(
                 providerRecords: providerRecords,
                 rollups: rollups,
                 health: health,
-                deepSeekBalance: deepSeekBalance
+                deepSeekBalance: await deepSeekBalance,
+                quotaWindows: await quotaWindows
             )
             return snapshot.providers.isEmpty
                 ? .unavailable("CC Switch database was found, but no supported provider usage rollups were present.")
                 : .success(snapshot)
         } catch {
             return .failure("CC Switch usage refresh failed: \(error.localizedDescription)")
+        }
+    }
+
+    func configuredModelCatalogItems(now: Date = .now) -> [ModelCatalogItem] {
+        guard fileManager.fileExists(atPath: databaseURL.path) else { return [] }
+        let snapshotURL = fileManager.temporaryDirectory
+            .appendingPathComponent("tokenbar-cc-switch-models-\(UUID().uuidString).db")
+        do {
+            try fileManager.copyItem(at: databaseURL, to: snapshotURL)
+            defer { try? fileManager.removeItem(at: snapshotURL) }
+
+            let reader = try SQLiteReader(path: snapshotURL.path)
+            let records = try reader.providerRecords()
+            return records.flatMap { record -> [ModelCatalogItem] in
+                let providerID = Self.normalizedProvider(record: record)?.providerID ?? record.id
+                let names = Array(Set(record.modelNames.filter { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false }))
+                return names.sorted().map { model in
+                    ModelCatalogItem(
+                        providerID: providerID,
+                        modelID: model,
+                        displayName: model,
+                        source: .ccSwitchConfig,
+                        baseURL: record.baseURL,
+                        configPath: databaseURL.path,
+                        fetchedAt: now
+                    )
+                }
+            }
+        } catch {
+            return []
         }
     }
 
@@ -106,6 +189,76 @@ struct CCSwitchUsageService {
         }
     }
 
+    private func liveQuotaWindows(from providers: [CCSwitchProviderRecord]) async -> [CCSwitchKnownProvider: [CCSwitchQuotaWindow]] {
+        var windowsByProvider: [CCSwitchKnownProvider: [CCSwitchQuotaWindow]] = [:]
+        var seenKeys = Set<String>()
+
+        for record in providers {
+            guard Self.normalizedProvider(record: record) == .miniMax,
+                  let apiKey = record.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  apiKey.isEmpty == false,
+                  seenKeys.insert(apiKey).inserted
+            else {
+                continue
+            }
+
+            guard let windows = await miniMaxQuotaWindows(apiKey: apiKey, record: record), windows.isEmpty == false else {
+                continue
+            }
+            windowsByProvider[.miniMax, default: []].append(contentsOf: windows)
+        }
+
+        return windowsByProvider
+    }
+
+    private func miniMaxQuotaWindows(apiKey: String, record: CCSwitchProviderRecord) async -> [CCSwitchQuotaWindow]? {
+        guard let url = URL(string: "https://api.minimaxi.com/v1/token_plan/remains") else { return nil }
+
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue(apiKey, forHTTPHeaderField: "X-Api-Key")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("TokenBar", forHTTPHeaderField: "User-Agent")
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                return nil
+            }
+            let decoded = try JSONDecoder().decode(CCSwitchMiniMaxQuotaResponse.self, from: data)
+            guard decoded.baseResp?.statusCode ?? 0 == 0 else { return nil }
+            return decoded.modelRemains.map { item in
+                CCSwitchQuotaWindow(
+                    providerID: CCSwitchKnownProvider.miniMax.providerID,
+                    providerDisplayName: record.name.isEmpty ? CCSwitchKnownProvider.miniMax.displayName : record.name,
+                    modelName: item.modelName,
+                    intervalUsedCount: item.currentIntervalUsageCount,
+                    intervalTotalCount: item.currentIntervalTotalCount,
+                    intervalUsedPercent: Self.usedPercent(
+                        used: item.currentIntervalUsageCount,
+                        total: item.currentIntervalTotalCount,
+                        remainingPercent: item.currentIntervalRemainingPercent
+                    ),
+                    intervalRemainingPercent: item.currentIntervalRemainingPercent,
+                    intervalStartAt: Self.date(milliseconds: item.startTime),
+                    intervalResetAt: Self.date(milliseconds: item.endTime),
+                    weeklyUsedCount: item.currentWeeklyUsageCount,
+                    weeklyTotalCount: item.currentWeeklyTotalCount,
+                    weeklyUsedPercent: Self.usedPercent(
+                        used: item.currentWeeklyUsageCount,
+                        total: item.currentWeeklyTotalCount,
+                        remainingPercent: item.currentWeeklyRemainingPercent
+                    ),
+                    weeklyRemainingPercent: item.currentWeeklyRemainingPercent,
+                    weeklyStartAt: Self.date(milliseconds: item.weeklyStartTime),
+                    weeklyResetAt: Self.date(milliseconds: item.weeklyEndTime)
+                )
+            }
+        } catch {
+            return nil
+        }
+    }
+
     private static func buildSnapshot(
         providerRecords: [CCSwitchProviderRecord],
         rollups: [CCSwitchDailyRollup],
@@ -120,6 +273,7 @@ struct CCSwitchUsageService {
         rollups: [CCSwitchDailyRollup],
         health: [String: CCSwitchProviderHealth],
         deepSeekBalance: DeepSeekBalance?,
+        quotaWindows: [CCSwitchKnownProvider: [CCSwitchQuotaWindow]] = [:],
         now: Date = .now
     ) -> CCSwitchUsageSnapshot {
         let recordsByCompositeID = Dictionary(uniqueKeysWithValues: providerRecords.map { ("\($0.appType):\($0.id)", $0) })
@@ -170,8 +324,39 @@ struct CCSwitchUsageService {
                 if aggregate.provider == .deepSeek, let deepSeekBalance {
                     detail += " DeepSeek live balance: \(deepSeekBalance.currency) \(String(format: "%.2f", deepSeekBalance.totalBalance)); API available: \(deepSeekBalance.isAvailable ? "yes" : "no")."
                 }
+                let providerQuotaWindows = quotaWindows[aggregate.provider] ?? []
+                if let primaryWindow = Self.primaryQuotaWindow(from: providerQuotaWindows) {
+                    detail += " Live quota from CC Switch provider key: \(primaryWindow.modelName) \(primaryWindow.intervalWindowLabel) is \(Int(primaryWindow.intervalUsedPercent))% used"
+                    if primaryWindow.intervalTotalCount > 0 {
+                        detail += " (\(Int(primaryWindow.intervalUsedCount))/\(Int(primaryWindow.intervalTotalCount)))"
+                    } else if let remaining = primaryWindow.intervalRemainingPercent {
+                        detail += " (\(Int(remaining))% remaining)"
+                    }
+                    detail += "; weekly \(primaryWindow.weeklyWindowLabel) is \(Int(primaryWindow.weeklyUsedPercent))% used"
+                    if primaryWindow.weeklyTotalCount > 0 {
+                        detail += " (\(Int(primaryWindow.weeklyUsedCount))/\(Int(primaryWindow.weeklyTotalCount)))"
+                    } else if let remaining = primaryWindow.weeklyRemainingPercent {
+                        detail += " (\(Int(remaining))% remaining)"
+                    }
+                    detail += "."
+                    let additionalNames = providerQuotaWindows
+                        .filter { $0.modelName != primaryWindow.modelName }
+                        .prefix(3)
+                        .map(\.modelName)
+                        .joined(separator: ", ")
+                    if additionalNames.isEmpty == false {
+                        detail += " Additional quota windows: \(additionalNames)."
+                    }
+                }
                 if healthyRecords.contains(where: { $0.hasAPIKey }) {
                     detail += " API key was detected in CC Switch config and used only in memory."
+                }
+                let dailyLimit = healthyRecords.compactMap(\.dailySpendLimit).max()
+                let monthlyLimit = healthyRecords.compactMap(\.monthlySpendLimit).max()
+                if dailyLimit != nil || monthlyLimit != nil {
+                    let daily = dailyLimit.map { String(format: "daily $%.2f", $0) }
+                    let monthly = monthlyLimit.map { String(format: "monthly $%.2f", $0) }
+                    detail += " Configured spend limits: \([daily, monthly].compactMap { $0 }.joined(separator: ", "))."
                 }
 
                 return CCSwitchProviderUsageSnapshot(
@@ -185,7 +370,10 @@ struct CCSwitchUsageService {
                     requestCountMonth: aggregate.requestCountMonth,
                     spendToday: aggregate.spendToday,
                     spendMonth: aggregate.spendMonth,
+                    dailySpendLimit: dailyLimit,
+                    monthlySpendLimit: monthlyLimit,
                     monthResetAt: monthResetAt,
+                    quotaWindows: providerQuotaWindows,
                     history: aggregate.history(),
                     sourceDetail: detail,
                     fetchedAt: now
@@ -248,9 +436,29 @@ struct CCSwitchUsageService {
         formatter.dateFormat = "yyyy-MM-dd"
         return formatter.string(from: date)
     }
+
+    private static func primaryQuotaWindow(from windows: [CCSwitchQuotaWindow]) -> CCSwitchQuotaWindow? {
+        windows.first(where: { $0.modelName == "general" && ($0.hasKnownIntervalLimit || $0.hasKnownWeeklyLimit) })
+            ?? windows.first(where: { $0.hasKnownIntervalLimit || $0.hasKnownWeeklyLimit })
+            ?? windows.first
+    }
+
+    private static func usedPercent(used: Double, total: Double, remainingPercent: Double?) -> Double {
+        if total > 0 {
+            return min(max((used / total) * 100, 0), 100)
+        }
+        if let remainingPercent {
+            return min(max(100 - remainingPercent, 0), 100)
+        }
+        return 0
+    }
+
+    private static func date(milliseconds: Double) -> Date {
+        Date(timeIntervalSince1970: milliseconds / 1000)
+    }
 }
 
-private enum CCSwitchKnownProvider: Hashable {
+private nonisolated enum CCSwitchKnownProvider: Hashable {
     case miniMax
     case deepSeek
     case xiaomiMiMo
@@ -304,6 +512,8 @@ private struct CCSwitchProviderRecord {
     var name: String
     var config: [String: Any]
     var meta: [String: Any]
+    var dailySpendLimit: Double?
+    var monthlySpendLimit: Double?
 
     var env: [String: Any] {
         config["env"] as? [String: Any] ?? [:]
@@ -314,7 +524,9 @@ private struct CCSwitchProviderRecord {
             ?? stringValue(config["api_key"])
             ?? stringValue(env["DEEPSEEK_API_KEY"])
             ?? stringValue(env["ANTHROPIC_AUTH_TOKEN"])
+            ?? stringValue(env["ANTHROPIC_API_KEY"])
             ?? stringValue(env["OPENAI_API_KEY"])
+            ?? stringValue(config["auth"].flatMap { ($0 as? [String: Any])?["OPENAI_API_KEY"] })
     }
 
     var hasAPIKey: Bool {
@@ -325,11 +537,24 @@ private struct CCSwitchProviderRecord {
         stringValue(config["baseUrl"])
             ?? stringValue(config["base_url"])
             ?? stringValue(env["ANTHROPIC_BASE_URL"])
+            ?? embeddedCodexProviderValue("base_url")
     }
 
     var modelNames: [String] {
         var names: [String] = []
-        for key in ["model", "ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL"] {
+        for key in [
+            "model",
+            "modelName",
+            "ANTHROPIC_MODEL",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME",
+            "OPENAI_MODEL",
+            "CODEX_MODEL"
+        ] {
             if let value = stringValue(config[key]) ?? stringValue(env[key]) {
                 names.append(value)
             }
@@ -337,13 +562,73 @@ private struct CCSwitchProviderRecord {
         if let models = config["models"] as? [[String: Any]] {
             names.append(contentsOf: models.compactMap { stringValue($0["id"]) ?? stringValue($0["name"]) })
         }
-        return names
+        if let routes = meta["claudeDesktopModelRoutes"] as? [String: Any] {
+            for (_, rawRoute) in routes {
+                guard let route = rawRoute as? [String: Any] else { continue }
+                if let model = stringValue(route["model"]) {
+                    names.append(model)
+                }
+                if let label = stringValue(route["labelOverride"]) {
+                    names.append(label)
+                }
+            }
+        }
+        if let embeddedModel = embeddedCodexTopLevelValue("model") {
+            names.append(embeddedModel)
+        }
+        return Array(Set(names.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { $0.isEmpty == false })).sorted()
     }
 
     private func stringValue(_ value: Any?) -> String? {
         guard let value else { return nil }
         if let string = value as? String { return string.isEmpty ? nil : string }
         return "\(value)"
+    }
+
+    private func embeddedCodexTopLevelValue(_ key: String) -> String? {
+        guard let content = stringValue(config["config"]) else { return nil }
+        var isTopLevel = true
+        for rawLine in content.components(separatedBy: .newlines) {
+            let line = rawLine.split(separator: "#", maxSplits: 1).first.map(String.init) ?? ""
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty { continue }
+            if trimmed.hasPrefix("[") {
+                isTopLevel = false
+                continue
+            }
+            guard isTopLevel, let separator = trimmed.firstIndex(of: "=") else { continue }
+            let candidate = trimmed[..<separator].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard candidate == key else { continue }
+            return trimmed[trimmed.index(after: separator)...]
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+        }
+        return nil
+    }
+
+    private func embeddedCodexProviderValue(_ key: String) -> String? {
+        guard let content = stringValue(config["config"]),
+              let provider = embeddedCodexTopLevelValue("model_provider") else {
+            return nil
+        }
+        let sectionName = "model_providers.\(provider)"
+        var inProvider = false
+        for rawLine in content.components(separatedBy: .newlines) {
+            let line = rawLine.split(separator: "#", maxSplits: 1).first.map(String.init) ?? ""
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty { continue }
+            if trimmed.hasPrefix("[") && trimmed.hasSuffix("]") {
+                inProvider = trimmed.trimmingCharacters(in: CharacterSet(charactersIn: "[]")) == sectionName
+                continue
+            }
+            guard inProvider, let separator = trimmed.firstIndex(of: "=") else { continue }
+            let candidate = trimmed[..<separator].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard candidate == key else { continue }
+            return trimmed[trimmed.index(after: separator)...]
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+        }
+        return nil
     }
 }
 
@@ -448,6 +733,69 @@ private struct DeepSeekBalanceResponse: Decodable {
     }
 }
 
+private struct CCSwitchMiniMaxQuotaResponse: Decodable {
+    var modelRemains: [CCSwitchMiniMaxQuotaItem]
+    var baseResp: CCSwitchMiniMaxBaseResponse?
+
+    enum CodingKeys: String, CodingKey {
+        case modelRemains = "model_remains"
+        case baseResp = "base_resp"
+    }
+}
+
+private struct CCSwitchMiniMaxBaseResponse: Decodable {
+    var statusCode: Int
+    var statusMsg: String
+
+    enum CodingKeys: String, CodingKey {
+        case statusCode = "status_code"
+        case statusMsg = "status_msg"
+    }
+}
+
+private struct CCSwitchMiniMaxQuotaItem: Decodable {
+    var startTime: Double
+    var endTime: Double
+    var currentIntervalTotalCount: Double
+    var currentIntervalUsageCount: Double
+    var modelName: String
+    var currentWeeklyTotalCount: Double
+    var currentWeeklyUsageCount: Double
+    var weeklyStartTime: Double
+    var weeklyEndTime: Double
+    var currentIntervalRemainingPercent: Double?
+    var currentWeeklyRemainingPercent: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case startTime = "start_time"
+        case endTime = "end_time"
+        case currentIntervalTotalCount = "current_interval_total_count"
+        case currentIntervalUsageCount = "current_interval_usage_count"
+        case modelName = "model_name"
+        case currentWeeklyTotalCount = "current_weekly_total_count"
+        case currentWeeklyUsageCount = "current_weekly_usage_count"
+        case weeklyStartTime = "weekly_start_time"
+        case weeklyEndTime = "weekly_end_time"
+        case currentIntervalRemainingPercent = "current_interval_remaining_percent"
+        case currentWeeklyRemainingPercent = "current_weekly_remaining_percent"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        startTime = try container.decodeLossyDouble(forKey: .startTime)
+        endTime = try container.decodeLossyDouble(forKey: .endTime)
+        currentIntervalTotalCount = try container.decodeLossyDouble(forKey: .currentIntervalTotalCount)
+        currentIntervalUsageCount = try container.decodeLossyDouble(forKey: .currentIntervalUsageCount)
+        modelName = (try? container.decode(String.self, forKey: .modelName)) ?? "unknown"
+        currentWeeklyTotalCount = try container.decodeLossyDouble(forKey: .currentWeeklyTotalCount)
+        currentWeeklyUsageCount = try container.decodeLossyDouble(forKey: .currentWeeklyUsageCount)
+        weeklyStartTime = try container.decodeLossyDouble(forKey: .weeklyStartTime)
+        weeklyEndTime = try container.decodeLossyDouble(forKey: .weeklyEndTime)
+        currentIntervalRemainingPercent = try? container.decodeLossyDouble(forKey: .currentIntervalRemainingPercent)
+        currentWeeklyRemainingPercent = try? container.decodeLossyDouble(forKey: .currentWeeklyRemainingPercent)
+    }
+}
+
 private final class SQLiteReader {
     private var db: OpaquePointer?
 
@@ -472,7 +820,9 @@ private final class SQLiteReader {
                 appType: row["app_type"] ?? "",
                 name: row["name"] ?? "",
                 config: config,
-                meta: meta
+                meta: meta,
+                dailySpendLimit: Double(row["limit_daily_usd"] ?? ""),
+                monthlySpendLimit: Double(row["limit_monthly_usd"] ?? "")
             )
         }
     }
@@ -546,6 +896,21 @@ private final class SQLiteReader {
     }
 
     private static let transientDestructor = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+}
+
+private extension KeyedDecodingContainer {
+    func decodeLossyDouble(forKey key: Key) throws -> Double {
+        if let value = try? decode(Double.self, forKey: key) {
+            return value
+        }
+        if let value = try? decode(Int.self, forKey: key) {
+            return Double(value)
+        }
+        if let value = try? decode(String.self, forKey: key), let number = Double(value) {
+            return number
+        }
+        throw DecodingError.dataCorruptedError(forKey: key, in: self, debugDescription: "Expected a numeric value.")
+    }
 }
 
 private enum SQLiteReaderError: LocalizedError {

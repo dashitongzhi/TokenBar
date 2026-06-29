@@ -50,7 +50,7 @@ private struct GuardDashboardView: View {
                 HStack(spacing: 14) {
                     SummaryTile(title: appState.localized("workspaceBudget"), value: workspaceBudgetText, symbol: "folder.badge.gearshape")
                     SummaryTile(title: appState.localized("estimatedRun"), value: "$\(appState.formatMoney(appState.estimatedRunCost))", symbol: "bolt.badge.clock")
-                    SummaryTile(title: appState.localized("sessionBudget"), value: "$\(appState.formatMoney(appState.projectedSessionSpend)) / $\(appState.formatMoney(appState.sessionBudget))", symbol: "gauge.with.dots.needle.50percent")
+                    SummaryTile(title: appState.localized("sessionBudget"), value: sessionBudgetText, symbol: "gauge.with.dots.needle.50percent")
                 }
 
                 RunConfigurationPanel()
@@ -62,7 +62,13 @@ private struct GuardDashboardView: View {
 
     private var workspaceBudgetText: String {
         guard let workspace = appState.selectedWorkspace else { return "-" }
+        guard workspace.dailyBudget > 0 else { return appState.localized("noBudgetSet") }
         return "$\(appState.formatMoney(workspace.spendToday)) / $\(appState.formatMoney(workspace.dailyBudget))"
+    }
+
+    private var sessionBudgetText: String {
+        guard appState.sessionBudget > 0 else { return appState.localized("noSessionBudget") }
+        return "$\(appState.formatMoney(appState.projectedSessionSpend)) / $\(appState.formatMoney(appState.sessionBudget))"
     }
 }
 
@@ -181,7 +187,7 @@ private struct RunConfigurationPanel: View {
                         }
                     }
 
-                    TextField(appState.localized("model"), text: $appState.selectedModel)
+                    ModelSelectionControl()
                 }
 
                 GridRow {
@@ -214,6 +220,48 @@ private struct RunConfigurationPanel: View {
         .padding(14)
         .background(Color(nsColor: .controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+private struct ModelSelectionControl: View {
+    @EnvironmentObject private var appState: AppState
+
+    private var models: [ModelCatalogItem] {
+        appState.selectedProviderModelCatalog
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                if models.isEmpty {
+                    TextField(appState.localized("model"), text: $appState.selectedModel)
+                        .textFieldStyle(.roundedBorder)
+                } else {
+                    Picker(appState.localized("model"), selection: $appState.selectedModel) {
+                        ForEach(models) { item in
+                            Text(item.modelID).tag(item.modelID)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(minWidth: 180)
+                }
+
+                Button {
+                    appState.refreshModelCatalog()
+                } label: {
+                    Image(systemName: "arrow.down.circle")
+                        .frame(width: 14, height: 14)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(appState.isRefreshingModelCatalog)
+                .help(appState.localized("pullModels"))
+            }
+
+            TextField(appState.localized("manualModelEntry"), text: $appState.selectedModel)
+                .textFieldStyle(.roundedBorder)
+                .font(.caption)
+        }
     }
 }
 
@@ -288,15 +336,25 @@ private struct WorkspacePolicyCard: View {
                 StatusPill(status: workspace.status)
             }
 
-            ProgressView(value: min(workspace.dailyRatio, 1))
-                .tint(workspace.status.color)
+            if workspace.dailyBudget > 0 {
+                ProgressView(value: min(workspace.dailyRatio, 1))
+                    .tint(workspace.status.color)
+            }
 
-            KeyValueRow(title: appState.localized("dailyBudget"), value: "$\(appState.formatMoney(workspace.spendToday)) / $\(appState.formatMoney(workspace.dailyBudget))")
-            KeyValueRow(title: appState.localized("monthlyBudget"), value: "$\(appState.formatMoney(workspace.spendMonth)) / $\(appState.formatMoney(workspace.monthlyBudget))")
+            KeyValueRow(title: appState.localized("dailyBudget"), value: dailyBudgetText)
+            KeyValueRow(title: appState.localized("monthlyBudget"), value: monthlyBudgetText)
             KeyValueRow(title: appState.localized("allowedProviders"), value: providerNames)
+            KeyValueRow(title: appState.localized("preferredProvider"), value: preferredProviderName)
+            KeyValueRow(title: appState.localized("defaultModel"), value: workspace.preferredModel?.isEmpty == false ? workspace.preferredModel ?? "-" : "-")
             KeyValueRow(title: appState.localized("blockedModels"), value: workspace.blockedModels.isEmpty ? "-" : workspace.blockedModels.joined(separator: ", "))
-            KeyValueRow(title: appState.localized("perRunCap"), value: "$\(appState.formatMoney(workspace.maxEstimatedRunCost))")
+            PerRunCapEditor(workspace: workspace)
             KeyValueRow(title: appState.localized("companyKey"), value: workspace.requireCompanyKey ? appState.localized("required") : appState.localized("optional"))
+            if let setupSourceDetail = workspace.setupSourceDetail, setupSourceDetail.isEmpty == false {
+                Text(setupSourceDetail)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(14)
         .background(Color(nsColor: .controlBackgroundColor))
@@ -307,6 +365,83 @@ private struct WorkspacePolicyCard: View {
         workspace.allowedProviderIDs.compactMap { id in
             appState.providers.first { $0.id == id }?.name ?? id
         }.joined(separator: ", ")
+    }
+
+    private var preferredProviderName: String {
+        guard let id = workspace.preferredProviderID, id.isEmpty == false else { return "-" }
+        return appState.providers.first { $0.id == id }?.name ?? id
+    }
+
+    private var dailyBudgetText: String {
+        guard workspace.dailyBudget > 0 else { return appState.localized("noBudgetSet") }
+        return "$\(appState.formatMoney(workspace.spendToday)) / $\(appState.formatMoney(workspace.dailyBudget))"
+    }
+
+    private var monthlyBudgetText: String {
+        guard workspace.monthlyBudget > 0 else { return appState.localized("noBudgetSet") }
+        return "$\(appState.formatMoney(workspace.spendMonth)) / $\(appState.formatMoney(workspace.monthlyBudget))"
+    }
+}
+
+private struct PerRunCapEditor: View {
+    @EnvironmentObject private var appState: AppState
+    var workspace: WorkspacePolicy
+
+    private var capBinding: Binding<Double> {
+        Binding(
+            get: { workspace.maxEstimatedRunCost },
+            set: { appState.updateWorkspaceMaxEstimatedRunCost(id: workspace.id, value: $0) }
+        )
+    }
+
+    private var step: Double {
+        workspace.maxEstimatedRunCost >= 10 ? 1 : 0.05
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text(appState.localized("perRunCap"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+
+                HStack(spacing: 6) {
+                    Button {
+                        appState.adjustWorkspaceMaxEstimatedRunCost(id: workspace.id, delta: -step)
+                    } label: {
+                        Image(systemName: "minus")
+                            .frame(width: 14, height: 14)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .accessibilityLabel(appState.localized("decreasePerRunCap"))
+
+                    TextField("", value: capBinding, format: .number.precision(.fractionLength(2)))
+                        .textFieldStyle(.roundedBorder)
+                        .multilineTextAlignment(.trailing)
+                        .monospacedDigit()
+                        .frame(width: 82)
+                        .accessibilityLabel(appState.localized("perRunCap"))
+
+                    Button {
+                        appState.adjustWorkspaceMaxEstimatedRunCost(id: workspace.id, delta: step)
+                    } label: {
+                        Image(systemName: "plus")
+                            .frame(width: 14, height: 14)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .accessibilityLabel(appState.localized("increasePerRunCap"))
+                }
+            }
+
+            Text(appState.localized("perRunCapHelp"))
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 

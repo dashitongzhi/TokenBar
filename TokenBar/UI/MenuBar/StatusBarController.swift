@@ -55,14 +55,12 @@ final class StatusBarController {
 
     private func updateStatusBar() {
         guard let button = statusItem.button else { return }
-        let color = appState.statusBarColor()
-        let symbol = appState.statusBarSymbolName()
-        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "TokenBar")?
-            .withSymbolConfiguration(.init(pointSize: 13, weight: .semibold))?
-            .tinted(with: color)
+        let image = NSImage(named: "TokenBarMenuBarGlyph") ?? NSImage(systemSymbolName: "chart.bar.fill", accessibilityDescription: "TokenBar")
+        image?.isTemplate = true
+        image?.size = NSSize(width: 18, height: 17)
         button.image = image
         button.title = appState.statusBarText()
-        button.contentTintColor = color
+        button.contentTintColor = .white
     }
 }
 

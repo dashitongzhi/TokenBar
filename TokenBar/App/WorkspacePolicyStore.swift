@@ -11,14 +11,34 @@ struct WorkspacePolicyStore {
     }
 
     func load(defaults: [WorkspacePolicy]) -> [WorkspacePolicy] {
-        guard let data = try? Data(contentsOf: storeURL),
-              let saved = try? JSONDecoder.tokenBar.decode([WorkspacePolicy].self, from: data) else {
+        guard let data = try? Data(contentsOf: storeURL) else {
+            return defaults
+        }
+        guard let saved = try? JSONDecoder.tokenBar.decode([WorkspacePolicy].self, from: data) else {
+            save(defaults)
             return defaults
         }
 
-        var merged = saved
-        for defaultPolicy in defaults where merged.contains(where: { $0.id == defaultPolicy.id }) == false {
-            merged.append(defaultPolicy)
+        var changed = false
+        var merged = saved.filter { policy in
+            let keep = Self.demoSeedIDs.contains(policy.id) == false
+            if keep == false { changed = true }
+            return keep
+        }
+        for defaultPolicy in defaults {
+            if let index = merged.firstIndex(where: { $0.id == defaultPolicy.id }) {
+                let updated = Self.mergeInferredDefaults(into: merged[index], defaultPolicy: defaultPolicy)
+                if updated != merged[index] {
+                    merged[index] = updated
+                    changed = true
+                }
+            } else {
+                merged.append(defaultPolicy)
+                changed = true
+            }
+        }
+        if changed {
+            save(merged)
         }
         return merged
     }
@@ -26,5 +46,33 @@ struct WorkspacePolicyStore {
     func save(_ policies: [WorkspacePolicy]) {
         guard let data = try? JSONEncoder.tokenBar.encode(policies) else { return }
         try? data.write(to: storeURL, options: [.atomic])
+    }
+
+    private static let demoSeedIDs: Set<String> = ["client-app", "personal-lab", "production-fix"]
+
+    private static func mergeInferredDefaults(into saved: WorkspacePolicy, defaultPolicy: WorkspacePolicy) -> WorkspacePolicy {
+        var merged = saved
+        if merged.preferredProviderID?.isEmpty != false {
+            merged.preferredProviderID = defaultPolicy.preferredProviderID
+        }
+        if merged.preferredModel?.isEmpty != false {
+            merged.preferredModel = defaultPolicy.preferredModel
+        }
+        if merged.setupSourceDetail?.isEmpty != false {
+            merged.setupSourceDetail = defaultPolicy.setupSourceDetail
+        }
+        if merged.configuredModelCount == nil {
+            merged.configuredModelCount = defaultPolicy.configuredModelCount
+        }
+        if merged.inferredFromPaths?.isEmpty != false {
+            merged.inferredFromPaths = defaultPolicy.inferredFromPaths
+        }
+        if merged.maxEstimatedRunCost <= 0, defaultPolicy.maxEstimatedRunCost > 0 {
+            merged.maxEstimatedRunCost = defaultPolicy.maxEstimatedRunCost
+        }
+        if merged.allowedProviderIDs.isEmpty {
+            merged.allowedProviderIDs = defaultPolicy.allowedProviderIDs
+        }
+        return merged
     }
 }

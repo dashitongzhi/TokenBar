@@ -15,16 +15,24 @@ budgets:
 
 providers:
   allowed:
-    - anthropic
     - openai
-    - openrouter
-  preferred: anthropic
-  require_company_key: true
+    - anthropic
+    - minimax
+  preferred: openai
+  require_company_key: false
 
 models:
+  default: gpt-5.5
   blocked:
     - opus
     - gpt-5-pro
+
+setup:
+  source: local_agent_config
+  configured_models: 13
+  inferred_from:
+    - /Users/kral/.codex/config.toml
+    - /Users/kral/.cc-switch/cc-switch.db
 
 rules:
   - name: Block expensive refactors on TokenBar

@@ -2,8 +2,10 @@ import Foundation
 
 struct CodexUsageSnapshot: Equatable {
     var primaryUsedPercent: Double
+    var primaryWindowSeconds: TimeInterval?
     var primaryResetAt: Date
     var secondaryUsedPercent: Double?
+    var secondaryWindowSeconds: TimeInterval?
     var secondaryResetAt: Date?
     var allowed: Bool
     var limitReached: Bool
@@ -24,7 +26,7 @@ struct CodexUsageService {
 
     init(
         session: URLSession = .shared,
-        authURL: URL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex/auth.json")
+        authURL: URL = UserHomeDirectory.url.appendingPathComponent(".codex/auth.json")
     ) {
         self.session = session
         self.authURL = authURL
@@ -42,8 +44,10 @@ struct CodexUsageService {
             let now = Date()
             let snapshot = CodexUsageSnapshot(
                 primaryUsedPercent: primary.usedPercent,
+                primaryWindowSeconds: primary.limitWindowSeconds,
                 primaryResetAt: primary.resetDate(fallback: now),
                 secondaryUsedPercent: response.rateLimit.secondaryWindow?.usedPercent,
+                secondaryWindowSeconds: response.rateLimit.secondaryWindow?.limitWindowSeconds,
                 secondaryResetAt: response.rateLimit.secondaryWindow?.resetDate(fallback: now),
                 allowed: response.rateLimit.allowed ?? true,
                 limitReached: response.rateLimit.limitReached ?? false,
@@ -159,11 +163,13 @@ private nonisolated struct CodexRateLimit: Decodable {
 
 private nonisolated struct CodexRateLimitWindow: Decodable {
     var usedPercent: Double
+    var limitWindowSeconds: TimeInterval?
     var resetAt: TimeInterval?
     var resetAfterSeconds: TimeInterval?
 
     enum CodingKeys: String, CodingKey {
         case usedPercent = "used_percent"
+        case limitWindowSeconds = "limit_window_seconds"
         case resetAt = "reset_at"
         case resetAfterSeconds = "reset_after_seconds"
     }
@@ -171,6 +177,7 @@ private nonisolated struct CodexRateLimitWindow: Decodable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         usedPercent = try container.decodeLossyDouble(forKey: .usedPercent)
+        limitWindowSeconds = try? container.decodeLossyDouble(forKey: .limitWindowSeconds)
         resetAt = try? container.decodeLossyDouble(forKey: .resetAt)
         resetAfterSeconds = try? container.decodeLossyDouble(forKey: .resetAfterSeconds)
     }

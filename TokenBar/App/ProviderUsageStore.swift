@@ -11,13 +11,26 @@ struct ProviderUsageStore {
     }
 
     func load(defaults: [ProviderUsage]) -> [ProviderUsage] {
-        guard let data = try? Data(contentsOf: storeURL),
-              let providers = try? JSONDecoder.tokenBar.decode([ProviderUsage].self, from: data) else {
+        let normalizedDefaults = Self.normalized(defaults)
+        guard let data = try? Data(contentsOf: storeURL) else {
+            return normalizedDefaults
+        }
+        guard let providers = try? JSONDecoder.tokenBar.decode([ProviderUsage].self, from: data) else {
+            save(normalizedDefaults)
             return Self.normalized(defaults)
         }
-        var merged = Self.normalized(providers)
-        for defaultProvider in Self.normalized(defaults) where merged.contains(where: { $0.id == defaultProvider.id }) == false {
+        var changed = false
+        var merged = Self.normalized(providers.filter { provider in
+            let keep = Self.legacyDemoProviderIDs.contains(provider.id) == false
+            if keep == false { changed = true }
+            return keep
+        })
+        for defaultProvider in normalizedDefaults where merged.contains(where: { $0.id == defaultProvider.id }) == false {
             merged.append(defaultProvider)
+            changed = true
+        }
+        if changed {
+            save(merged)
         }
         return merged
     }
@@ -148,4 +161,6 @@ struct ProviderUsageStore {
             return normalized
         }
     }
+
+    private static let legacyDemoProviderIDs: Set<String> = ["cursor", "github", "stripe"]
 }

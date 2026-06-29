@@ -100,67 +100,45 @@ enum AppSeedData {
                 resetHours: 24 * 30,
                 dataSource: .unsupported,
                 sourceDetail: "Xiaomi MiMo usage is available from CC Switch local proxy rollups when present."
-            ),
-            provider(id: "cursor", name: "Cursor", category: "AI Tool", symbol: "cursorarrow.motionlines", current: 0, limit: 100, unit: "requests", spendToday: 0, spendMonth: 0, resetHours: 24 * 30),
-            provider(id: "github", name: "GitHub Copilot", category: "Developer Tool", symbol: "chevron.left.forwardslash.chevron.right", current: 0, limit: 100, unit: "requests", spendToday: 0, spendMonth: 0, resetHours: 24 * 30),
-            provider(id: "stripe", name: "Stripe", category: "Payments", symbol: "creditcard.fill", current: 0, limit: 5_000, unit: "events", spendToday: 0, spendMonth: 0, resetHours: 24 * 30)
+            )
         ]
     }
 
-    static func workspacePolicies() -> [WorkspacePolicy] {
-        [
+    static func workspacePolicies(inference: WorkspacePolicyInference? = nil) -> [WorkspacePolicy] {
+        let inferred = inference ?? WorkspacePolicyInference(
+            allowedProviderIDs: ["openai", "anthropic", "openrouter"],
+            preferredProviderID: "openai",
+            preferredModel: "gpt-5",
+            maxEstimatedRunCost: 1.50,
+            setupSourceDetail: "Default local policy. No Codex, Claude, or CC Switch model configuration was found yet.",
+            configuredModelCount: 0,
+            inferredFromPaths: []
+        )
+        return [
             WorkspacePolicy(
-                id: "client-app",
-                name: "Client App",
-                pathHint: "~/project/client-app",
-                client: "Acme",
-                dailyBudget: 6,
-                monthlyBudget: 180,
-                spendToday: 4.7,
-                spendMonth: 96.2,
-                allowedProviderIDs: ["anthropic", "openrouter", "github"],
-                blockedModels: ["opus"],
-                maxEstimatedRunCost: 1.5,
-                requireCompanyKey: true
-            ),
-            WorkspacePolicy(
-                id: "personal-lab",
-                name: "Personal Lab",
-                pathHint: "~/project/lab",
-                client: "Personal",
-                dailyBudget: 3,
-                monthlyBudget: 60,
-                spendToday: 0.8,
-                spendMonth: 18.4,
-                allowedProviderIDs: ["openai", "openrouter", "deepseek", "cursor"],
+                id: "local-workspace",
+                name: "Local Workspace",
+                pathHint: "~",
+                client: "local",
+                dailyBudget: 0,
+                monthlyBudget: 0,
+                spendToday: 0,
+                spendMonth: 0,
+                allowedProviderIDs: inferred.allowedProviderIDs,
                 blockedModels: [],
-                maxEstimatedRunCost: 0.75,
-                requireCompanyKey: false
-            ),
-            WorkspacePolicy(
-                id: "production-fix",
-                name: "Production Fix",
-                pathHint: "~/work/prod",
-                client: "Ops",
-                dailyBudget: 12,
-                monthlyBudget: 300,
-                spendToday: 2.1,
-                spendMonth: 144.9,
-                allowedProviderIDs: ["anthropic", "openai", "github"],
-                blockedModels: [],
-                maxEstimatedRunCost: 3,
-                requireCompanyKey: true
+                maxEstimatedRunCost: inferred.maxEstimatedRunCost,
+                requireCompanyKey: false,
+                preferredProviderID: inferred.preferredProviderID,
+                preferredModel: inferred.preferredModel,
+                setupSourceDetail: inferred.setupSourceDetail,
+                configuredModelCount: inferred.configuredModelCount,
+                inferredFromPaths: inferred.inferredFromPaths
             )
         ]
     }
 
     static func auditEvents() -> [AuditEvent] {
-        [
-            AuditEvent(timestamp: .now.addingTimeInterval(-420), provider: "OpenAI", action: "usage.needs_key", detail: "Live usage starts after OPENAI_ADMIN_KEY is available"),
-            AuditEvent(timestamp: .now.addingTimeInterval(-720), provider: "Anthropic", action: "usage.needs_key", detail: "Live usage starts after ANTHROPIC_ADMIN_KEY is available"),
-            AuditEvent(timestamp: .now.addingTimeInterval(-900), provider: "Providers", action: "usage.unsupported", detail: "Providers without live adapters stay visible but are marked unsupported"),
-            AuditEvent(timestamp: .now.addingTimeInterval(-1400), provider: "Keychain", action: "key.lookup", detail: "Keychain stores credential handles locally")
-        ]
+        []
     }
 
     static func provider(

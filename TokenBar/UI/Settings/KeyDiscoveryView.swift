@@ -13,7 +13,7 @@ struct KeyDiscoveryView: View {
     @State private var importMessages: [String: String] = [:]
 
     private var scanTargets: [DiscoveryTarget] {
-        let home = FileManager.default.homeDirectoryForCurrentUser
+        let home = UserHomeDirectory.url
         var targets: [DiscoveryTarget] = []
 
         if includeShellProfiles {

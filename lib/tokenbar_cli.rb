@@ -162,6 +162,7 @@ module TokenBarCLI
       input["providerID"] = provider_from_model_or_agent(input["model"], input["agent"]) || input["providerID"]
     end
     apply_config_defaults!(input, config)
+    attach_config_policy!(input, config)
     apply_codex_key_source_default!(input, check_options)
     estimate = apply_codex_preflight_estimate!(input, check_options, config)
     input["estimatedCost"] ||= 0.0
@@ -215,6 +216,7 @@ module TokenBarCLI
   def policy_init(options, argv)
     root = repo_root
     cwd = Pathname.pwd.expand_path
+    inferred = infer_workspace_policy(cwd)
     init_options = {
       output: cwd.join("tokenbar.yml"),
       workspace_id: slug(cwd.basename.to_s),
@@ -223,13 +225,15 @@ module TokenBarCLI
       client: "local",
       daily_budget: 8.00,
       monthly_budget: 160.00,
-      max_run: 1.50,
+      max_run: inferred[:max_run],
       spend_today: 0.00,
       spend_month: 0.00,
-      allowed_providers: %w[anthropic openai openrouter],
-      preferred_provider: "anthropic",
+      allowed_providers: inferred[:allowed_providers],
+      preferred_provider: inferred[:preferred_provider],
+      default_model: inferred[:default_model],
       require_company_key: false,
-      blocked_models: %w[opus gpt-5-pro],
+      blocked_models: inferred[:blocked_models],
+      inference: inferred,
       hooks: [],
       force: false
     }
@@ -242,9 +246,10 @@ module TokenBarCLI
       opts.on("--client CLIENT", "Client or owner label (default: local)") { |value| init_options[:client] = value }
       opts.on("--daily-budget USD", Float, "Daily budget in USD (default: 8.00)") { |value| init_options[:daily_budget] = value }
       opts.on("--monthly-budget USD", Float, "Monthly budget in USD (default: 160.00)") { |value| init_options[:monthly_budget] = value }
-      opts.on("--max-run-cost USD", Float, "Per-run cost cap in USD (default: 1.50)") { |value| init_options[:max_run] = value }
-      opts.on("--allowed-providers LIST", "Comma-separated providers (default: anthropic,openai,openrouter)") { |value| init_options[:allowed_providers] = split_list(value) }
-      opts.on("--preferred-provider PROVIDER", "Preferred provider (default: anthropic)") { |value| init_options[:preferred_provider] = value }
+      opts.on("--max-run-cost USD", Float, "Per-run cost cap in USD (default: inferred from local agent config)") { |value| init_options[:max_run] = value }
+      opts.on("--allowed-providers LIST", "Comma-separated providers (default: inferred from local agent config)") { |value| init_options[:allowed_providers] = split_list(value) }
+      opts.on("--preferred-provider PROVIDER", "Preferred provider (default: inferred from local agent config)") { |value| init_options[:preferred_provider] = value }
+      opts.on("--default-model MODEL", "Default model written to models.default (default: inferred from local agent config)") { |value| init_options[:default_model] = value }
       opts.on("--require-company-key", "Block OpenAI runs unless company-key policy is satisfied") { init_options[:require_company_key] = true }
       opts.on("--blocked-models LIST", "Comma-separated blocked model substrings (default: opus,gpt-5-pro)") { |value| init_options[:blocked_models] = split_list(value) }
       opts.on("--hooks LIST", "Write hook config for codex, claude, or all") { |value| init_options[:hooks] = parse_hooks(value) }
@@ -271,7 +276,7 @@ module TokenBarCLI
       "agent" => "codex",
       "workspaceID" => init_options[:workspace_id],
       "providerID" => init_options[:preferred_provider],
-      "model" => default_model(init_options[:preferred_provider]),
+      "model" => init_options[:default_model],
       "estimatedCost" => 0.0,
       "estimatedTokens" => 0,
       "intent" => "policy_init_smoke"
@@ -282,6 +287,7 @@ module TokenBarCLI
       "policy" => init_options[:output].to_s,
       "hooks" => init_options[:hooks],
       "written" => written,
+      "inference" => inferred,
       "smokeDecision" => {
         "status" => decision["status"],
         "reasons" => decision["reasons"]
@@ -744,6 +750,208 @@ module TokenBarCLI
     words.map { |word| word[0].upcase + word[1..].to_s }.join(" ")
   end
 
+  def infer_workspace_policy(cwd)
+    signals = []
+    signals.concat(codex_config_signals)
+    signals.concat(claude_config_signals)
+    signals.concat(cc_switch_config_signals)
+    signals = signals.select { |signal| !blank?(signal[:provider]) && !blank?(signal[:model]) }
+    preferred = signals.min_by { |signal| [signal[:rank], signal[:model].to_s] }
+    allowed = ordered_unique(signals.map { |signal| policy_provider_id(signal[:provider]) })
+    allowed = %w[openai anthropic openrouter] if allowed.empty?
+    preferred_provider = policy_provider_id(preferred&.fetch(:provider, nil)) || allowed.first || "openai"
+    default_model_value = preferred&.fetch(:model, nil) || default_model(preferred_provider)
+    blocked_models = %w[opus gpt-5-pro].reject do |blocked|
+      signals.any? { |signal| signal[:model].to_s.downcase.include?(blocked) }
+    end
+    paths = ordered_unique(signals.map { |signal| signal[:path] }.compact)
+
+    {
+      allowed_providers: allowed,
+      preferred_provider: preferred_provider,
+      default_model: default_model_value,
+      max_run: default_per_run_cap(preferred_provider, default_model_value),
+      blocked_models: blocked_models,
+      configured_models: signals.length,
+      paths: paths,
+      source: paths.empty? ? "fallback_defaults" : "local_agent_config"
+    }
+  end
+
+  def codex_config_signals
+    path = Pathname.new("~/.codex/config.toml").expand_path
+    return [] unless path.file?
+
+    values = top_level_toml_values(path.read)
+    model = values["model"]
+    return [] if blank?(model)
+
+    provider = provider_from_hint_or_model(values["model_provider"] || values["modelProvider"], model, "openai")
+    [{ agent: "codex", provider: provider, model: model, path: path.to_s, rank: 0 }]
+  rescue SystemCallError
+    []
+  end
+
+  def claude_config_signals
+    paths = [
+      Pathname.new("~/.claude/settings.json").expand_path,
+      Pathname.new("~/.claude/config.json").expand_path
+    ]
+    paths.flat_map do |path|
+      next [] unless path.file?
+
+      object = JSON.parse(path.read)
+      model_strings(object).map do |model|
+        {
+          agent: "claudeCode",
+          provider: provider_from_hint_or_model(nil, model, "anthropic"),
+          model: model,
+          path: path.to_s,
+          rank: 1
+        }
+      end
+    rescue JSON::ParserError, SystemCallError
+      []
+    end
+  end
+
+  def cc_switch_config_signals
+    database = Pathname.new("~/.cc-switch/cc-switch.db").expand_path
+    return [] unless database.file?
+
+    stdout, _stderr, status = Open3.capture3(
+      "sqlite3",
+      "-json",
+      database.to_s,
+      "select id, app_type, name, settings_config from providers"
+    )
+    return [] unless status.success?
+
+    JSON.parse(stdout).flat_map do |row|
+      config = JSON.parse(row["settings_config"].to_s)
+      models = model_strings(config)
+      models.map do |model|
+        provider = provider_from_hint_or_model(
+          [row["id"], row["app_type"], row["name"], config["baseURL"], config["baseUrl"], config["base_url"]].compact.join(" "),
+          model,
+          row["app_type"] == "codex" ? "openai" : "custom"
+        )
+        {
+          agent: row["app_type"],
+          provider: provider,
+          model: model,
+          path: database.to_s,
+          rank: 2
+        }
+      end
+    end
+  rescue Errno::ENOENT, JSON::ParserError
+    []
+  end
+
+  def top_level_toml_values(content)
+    values = {}
+    in_top_level = true
+    content.each_line do |raw_line|
+      line = raw_line.split("#", 2).first.to_s.strip
+      next if line.empty?
+      if line.start_with?("[")
+        in_top_level = false
+        next
+      end
+      next unless in_top_level
+      key, raw_value = line.split("=", 2).map { |part| part&.strip }
+      next if blank?(key) || blank?(raw_value)
+
+      values[key] = raw_value.gsub(/\A["']|["']\z/, "")
+    end
+    values
+  end
+
+  def model_strings(value)
+    models = []
+    walk_model_strings(value, models)
+    ordered_unique(models).select { |model| looks_like_model?(model) }
+  end
+
+  def walk_model_strings(value, models)
+    case value
+    when Hash
+      value.each do |key, child|
+        normalized = key.to_s.downcase.tr("_-", "")
+        if child.is_a?(String) && %w[model modelid modelname defaultmodel].include?(normalized)
+          models << child
+        elsif normalized == "env" && child.is_a?(Hash)
+          child.each do |env_key, env_value|
+            next unless env_value.is_a?(String)
+            next unless %w[ANTHROPIC_MODEL CLAUDE_MODEL OPENAI_MODEL CODEX_MODEL].include?(env_key.to_s.upcase)
+
+            models << env_value
+          end
+        end
+        walk_model_strings(child, models)
+      end
+    when Array
+      value.each { |child| walk_model_strings(child, models) }
+    end
+  end
+
+  def looks_like_model?(value)
+    normalized = value.to_s.strip.downcase
+    return false if normalized.length < 2 || normalized.length > 120
+
+    %w[claude gpt o1 o3 o4 gemini deepseek minimax mistral kimi mimo xiaomi glm qwen].any? do |marker|
+      normalized.include?(marker)
+    end
+  end
+
+  def provider_from_hint_or_model(hint, model, fallback)
+    haystack = [hint, model].compact.join(" ").downcase
+    return "anthropic" if haystack.include?("anthropic") || haystack.include?("claude")
+    return "openai" if haystack.include?("openai") || haystack.include?("gpt") || haystack.match?(/\bo[134]\b/)
+    return "openrouter" if haystack.include?("openrouter")
+    return "minimax" if haystack.include?("minimax")
+    return "deepseek" if haystack.include?("deepseek")
+    return "google" if haystack.include?("gemini") || haystack.include?("google")
+    return "mistral" if haystack.include?("mistral")
+    return "kimi" if haystack.include?("kimi")
+    return "xiaomi-mimo" if haystack.include?("mimo") || haystack.include?("xiaomi")
+    return "glm" if haystack.include?("glm")
+    return "qwen" if haystack.include?("qwen")
+
+    fallback
+  end
+
+  def policy_provider_id(provider)
+    return nil if blank?(provider)
+
+    case provider
+    when "codex", "ccswitch-codex"
+      "openai"
+    else
+      provider
+    end
+  end
+
+  def default_per_run_cap(provider, model)
+    normalized = "#{provider} #{model}".downcase
+    return 2.50 if normalized.include?("pro") || normalized.include?("opus")
+    return 0.75 if normalized.match?(/mini|haiku|deepseek|minimax|kimi|glm/)
+
+    1.50
+  end
+
+  def ordered_unique(values)
+    seen = {}
+    values.each_with_object([]) do |value, memo|
+      item = value.to_s.strip
+      next if item.empty? || seen[item]
+
+      seen[item] = true
+      memo << item
+    end
+  end
+
   def validate_init_options!(options)
     raise Error, "--workspace-id cannot be empty" if blank?(options[:workspace_id])
     raise Error, "--workspace-name cannot be empty" if blank?(options[:workspace_name])
@@ -751,6 +959,7 @@ module TokenBarCLI
     raise Error, "--monthly-budget must be >= 0" if options[:monthly_budget].negative?
     raise Error, "--max-run-cost must be > 0" unless options[:max_run].positive?
     raise Error, "--allowed-providers cannot be empty" if options[:allowed_providers].empty?
+    raise Error, "--default-model cannot be empty" if blank?(options[:default_model])
     unless options[:allowed_providers].include?(options[:preferred_provider])
       raise Error, "--preferred-provider must be included in --allowed-providers"
     end
@@ -781,11 +990,28 @@ module TokenBarCLI
       "",
       "models:"
     ]
+    lines << "  default: #{yaml_scalar(options[:default_model])}"
     if options[:blocked_models].empty?
       lines << "  blocked: []"
     else
       lines << "  blocked:"
       lines.concat(options[:blocked_models].map { |model| "    - #{yaml_scalar(model)}" })
+    end
+    if options[:inference]
+      inference = options[:inference]
+      lines.concat([
+        "",
+        "setup:",
+        "  source: #{yaml_scalar(inference[:source])}",
+        "  configured_models: #{inference[:configured_models].to_i}",
+        "  inferred_from:"
+      ])
+      paths = Array(inference[:paths])
+      if paths.empty?
+        lines << "    - #{yaml_scalar(options[:workspace_path])}"
+      else
+        lines.concat(paths.map { |path| "    - #{yaml_scalar(path)}" })
+      end
     end
     lines << ""
     lines.join("\n")
@@ -917,7 +1143,7 @@ module TokenBarCLI
 
     input["workspaceID"] ||= workspace["id"] || File.basename(Dir.pwd)
     input["providerID"] ||= providers["preferred"] || allowed.first
-    input["model"] ||= default_model(input["providerID"])
+    input["model"] ||= config&.dig("models", "default") || default_model(input["providerID"])
   end
 
   def attach_config_policy!(input, config)
@@ -934,6 +1160,20 @@ module TokenBarCLI
     input["allowedProviderIDs"] = workspace["allowedProviderIDs"]
     input["blockedModels"] = workspace["blockedModels"]
     input["requireCompanyKey"] = workspace["requireCompanyKey"]
+    input["providerID"] ||= config.dig("providers", "preferred") || workspace["allowedProviderIDs"].first
+    input["model"] ||= config.dig("models", "default") || default_model(input["providerID"])
+    input["preferredProviderID"] = config.dig("providers", "preferred")
+    input["preferredModel"] = config.dig("models", "default")
+    input
+  end
+
+  def attach_routing_config!(input, config)
+    return input unless config
+
+    workspace = offline_workspace(config, input["workspaceID"] || config.dig("workspace", "id"))
+    input["workspaceID"] ||= workspace["id"]
+    input["workspaceName"] ||= workspace["name"]
+    input["workspacePath"] ||= workspace["pathHint"]
     input["providerID"] ||= config.dig("providers", "preferred") || workspace["allowedProviderIDs"].first
     input
   end
@@ -988,7 +1228,15 @@ module TokenBarCLI
   def provider_from_model_or_agent(model, agent)
     model = model.to_s.downcase
     return "anthropic" if model.include?("claude")
-    return "openai" if model.include?("gpt") || model.match?(/\bo[34]\b/)
+    return "openai" if model.include?("gpt") || model.match?(/\bo[134]\b/)
+    return "minimax" if model.include?("minimax")
+    return "deepseek" if model.include?("deepseek")
+    return "google" if model.include?("gemini")
+    return "mistral" if model.include?("mistral")
+    return "kimi" if model.include?("kimi")
+    return "xiaomi-mimo" if model.include?("mimo") || model.include?("xiaomi")
+    return "glm" if model.include?("glm")
+    return "qwen" if model.include?("qwen")
     return "anthropic" if agent == "claudeCode"
     return "openai" if agent == "codex"
 
@@ -1005,10 +1253,11 @@ module TokenBarCLI
     current_directory = dig_path(payload, %w[workspace current_dir]) ||
                         dig_path(payload, %w[workspace currentDirectory]) ||
                         string_deep_find(payload, %w[current_dir currentDirectory cwd])
+    model = dig_path(payload, %w[model id]) || dig_path(payload, %w[model name]) || string_deep_find(payload, %w[model_id modelId model])
     {
       "agent" => "claudeCode",
-      "providerID" => "anthropic",
-      "model" => dig_path(payload, %w[model id]) || dig_path(payload, %w[model name]) || string_deep_find(payload, %w[model_id modelId]),
+      "providerID" => provider_from_model_or_agent(model, "claudeCode"),
+      "model" => model,
       "sessionID" => string_deep_find(payload, %w[session_id sessionId]),
       "source" => "Claude Code statusline",
       "currentDirectory" => current_directory,
@@ -1056,7 +1305,7 @@ module TokenBarCLI
 
     {
       "agent" => "codex",
-      "providerID" => "openai",
+      "providerID" => provider_from_model_or_agent(model, "codex") || "openai",
       "model" => model,
       "sessionID" => session_id,
       "source" => "Codex local transcript",
@@ -1361,6 +1610,12 @@ module TokenBarCLI
     case provider
     when "anthropic" then "claude-sonnet"
     when "openai" then "gpt-5"
+    when "minimax" then "minimax-m1"
+    when "deepseek" then "deepseek-chat"
+    when "google" then "gemini-2.5-pro"
+    when "mistral" then "mistral-large-latest"
+    when "kimi" then "kimi-k2"
+    when "glm" then "glm-4.5"
     else "unspecified"
     end
   end
@@ -1458,7 +1713,9 @@ module TokenBarCLI
       "allowedProviderIDs" => Array(providers["allowed"]).map(&:to_s),
       "blockedModels" => Array(models["blocked"]).map(&:to_s),
       "maxEstimatedRunCost" => numeric_config(budgets["max_run"] || budgets["maxEstimatedRunCost"], Float::INFINITY),
-      "requireCompanyKey" => providers["require_company_key"] == true || providers["requireCompanyKey"] == true
+      "requireCompanyKey" => providers["require_company_key"] == true || providers["requireCompanyKey"] == true,
+      "preferredProviderID" => providers["preferred"],
+      "preferredModel" => models["default"]
     }
   end
 
@@ -1479,6 +1736,7 @@ module TokenBarCLI
     workspace = config.fetch("workspace", {})
     budgets = config.fetch("budgets", {})
     providers = config.fetch("providers", {})
+    models = config.fetch("models", {})
     {
       "path" => config["path"],
       "workspace" => {
@@ -1491,6 +1749,10 @@ module TokenBarCLI
         "allowed" => providers["allowed"],
         "preferred" => providers["preferred"],
         "requireCompanyKey" => providers["require_company_key"] || providers["requireCompanyKey"] || false
+      },
+      "models" => {
+        "default" => models["default"],
+        "blocked" => models["blocked"]
       }
     }
   end
@@ -1599,11 +1861,24 @@ module TokenBarCLI
     end
 
     smoke = payload["smokeDecision"]
+    inference = payload["inference"] || {}
+    if inference["source"] || inference[:source]
+      source = inference["source"] || inference[:source]
+      count = inference["configured_models"] || inference[:configured_models] || 0
+      puts
+      puts "Inferred defaults: #{source} (#{count} configured models)"
+      puts "- providers: #{Array(inference["allowed_providers"] || inference[:allowed_providers]).join(", ")}"
+      puts "- preferred: #{inference["preferred_provider"] || inference[:preferred_provider]} / #{inference["default_model"] || inference[:default_model]}"
+      puts "- per-run cap: $#{format_money((inference["max_run"] || inference[:max_run]).to_f)}"
+    end
     puts
     puts "Smoke check: #{smoke["status"].to_s.upcase}"
     Array(smoke["reasons"]).each { |reason| puts "- #{reason}" }
     puts
-    puts "Next: run tokenbar check --agent codex --provider #{load_config(payload["policy"]).dig("providers", "preferred")} --model #{default_model(load_config(payload["policy"]).dig("providers", "preferred"))}"
+    config = load_config(payload["policy"])
+    provider = config.dig("providers", "preferred")
+    model = config.dig("models", "default") || default_model(provider)
+    puts "Next: run tokenbar check --agent codex --provider #{provider} --model #{model}"
   end
 
   def format_money(value)

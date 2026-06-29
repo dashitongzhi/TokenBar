@@ -13,10 +13,17 @@ enum LocalAPIPayloadBuilder {
                     "name": workspace.name,
                     "pathHint": workspace.pathHint,
                     "dailyBudget": workspace.dailyBudget,
+                    "monthlyBudget": workspace.monthlyBudget,
                     "spendToday": workspace.spendToday,
+                    "spendMonth": workspace.spendMonth,
+                    "maxEstimatedRunCost": workspace.maxEstimatedRunCost,
                     "allowedProviders": workspace.allowedProviderIDs,
+                    "preferredProvider": workspace.preferredProviderID ?? NSNull(),
+                    "preferredModel": workspace.preferredModel ?? NSNull(),
                     "blockedModels": workspace.blockedModels,
-                    "requireCompanyKey": workspace.requireCompanyKey
+                    "requireCompanyKey": workspace.requireCompanyKey,
+                    "setupSourceDetail": workspace.setupSourceDetail ?? NSNull(),
+                    "configuredModelCount": workspace.configuredModelCount ?? NSNull()
                 ] as [String: Any]
             }
         ]
