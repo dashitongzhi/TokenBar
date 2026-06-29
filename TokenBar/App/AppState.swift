@@ -124,6 +124,7 @@ final class AppState: ObservableObject {
     private let workspacePolicyStore = WorkspacePolicyStore()
     private let auditEventStore = AuditEventStore()
     private let localAgentUsageLedgerStore = LocalAgentUsageLedgerStore()
+    private let smartRoutingLedgerStore = SmartRoutingLedgerStore()
     private let openAIUsageService = OpenAIUsageService()
     private let anthropicUsageService = AnthropicUsageService()
     private let openRouterCreditsService = OpenRouterCreditsService()
@@ -485,6 +486,24 @@ final class AppState: ObservableObject {
             return Data(#"{"error":"invalid_claude_statusline_input"}"#.utf8)
         }
         return ingestLocalAgentUsageJSON(input: input)
+    }
+
+    func recordSmartRoutingRunJSON(input: SmartRoutingRunInput) -> Data {
+        let record = smartRoutingLedgerStore.record(
+            input,
+            fallbackWorkspaceID: selectedWorkspaceID,
+            fallbackAgent: selectedAgent
+        )
+        addAudit(
+            provider: record.agent.displayName,
+            action: "routing.\(record.signal.rawValue)",
+            detail: "\(record.taskIntent) · \(record.providerID)/\(record.model) · $\(formatMoney(record.actualCost))"
+        )
+        return LocalAPIPayloadBuilder.smartRoutingRunJSON(record: record)
+    }
+
+    func smartRoutingStatsJSON() -> Data {
+        LocalAPIPayloadBuilder.smartRoutingStatsJSON(snapshot: smartRoutingLedgerStore.stats())
     }
 
     func mcpSnapshotJSON(filteredProviderID: String? = nil) -> Data {
