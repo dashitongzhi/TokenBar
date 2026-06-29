@@ -402,9 +402,9 @@ struct CCSwitchUsageService {
         if haystack.contains("minimax") || haystack.contains("mini-max") { return .miniMax }
         if haystack.contains("mimo") || haystack.contains("xiaomi") { return .xiaomiMiMo }
         if haystack.contains("glm") { return .glm }
-        if haystack.contains("kral") || haystack.contains("kralai") { return .kral }
+        if haystack.contains("openai") || haystack.contains("gpt") || haystack.contains("o1") || haystack.contains("o3") || haystack.contains("o4") { return .openAI }
         if haystack.contains("anthropic") || haystack.contains("claude") { return .anthropic }
-        if rollup.appType == "codex" { return .ccSwitchCodex }
+        if rollup.appType == "codex" { return .openAI }
         return nil
     }
 
@@ -421,9 +421,9 @@ struct CCSwitchUsageService {
         if haystack.contains("minimax") || haystack.contains("mini-max") || haystack.contains("minimaxi") { return .miniMax }
         if haystack.contains("mimo") || haystack.contains("xiaomi") { return .xiaomiMiMo }
         if haystack.contains("glm") { return .glm }
-        if haystack.contains("kral") || haystack.contains("kralai") { return .kral }
+        if haystack.contains("openai") || haystack.contains("gpt") || haystack.contains("o1") || haystack.contains("o3") || haystack.contains("o4") { return .openAI }
         if haystack.contains("anthropic") || haystack.contains("claude") { return .anthropic }
-        if record.appType == "codex" { return .ccSwitchCodex }
+        if record.appType == "codex" { return .openAI }
         return nil
     }
 
@@ -468,7 +468,7 @@ private nonisolated enum CCSwitchKnownProvider: Hashable {
     case xiaomiMiMo
     case ccSwitchCodex
     case glm
-    case kral
+    case openAI
     case anthropic
 
     var providerID: String {
@@ -478,7 +478,7 @@ private nonisolated enum CCSwitchKnownProvider: Hashable {
         case .xiaomiMiMo: "xiaomi-mimo"
         case .ccSwitchCodex: "ccswitch-codex"
         case .glm: "glm"
-        case .kral: "kral"
+        case .openAI: "openai"
         case .anthropic: "anthropic"
         }
     }
@@ -490,7 +490,7 @@ private nonisolated enum CCSwitchKnownProvider: Hashable {
         case .xiaomiMiMo: "Xiaomi MiMo"
         case .ccSwitchCodex: "CC Switch Codex"
         case .glm: "GLM"
-        case .kral: "Kral"
+        case .openAI: "OpenAI"
         case .anthropic: "Anthropic"
         }
     }
@@ -502,7 +502,7 @@ private nonisolated enum CCSwitchKnownProvider: Hashable {
         case .xiaomiMiMo: "waveform.path.ecg"
         case .ccSwitchCodex: "terminal.fill"
         case .glm: "sparkle.magnifyingglass"
-        case .kral: "network"
+        case .openAI: "sparkles"
         case .anthropic: "text.bubble.fill"
         }
     }
@@ -514,7 +514,7 @@ private nonisolated enum CCSwitchKnownProvider: Hashable {
         case .xiaomiMiMo: 2
         case .ccSwitchCodex: 3
         case .glm: 4
-        case .kral: 5
+        case .openAI: 5
         case .anthropic: 6
         }
     }

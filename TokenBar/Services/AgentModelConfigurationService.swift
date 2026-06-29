@@ -296,7 +296,6 @@ struct AgentModelConfigurationService {
         if normalized.contains("glm") { return "glm" }
         if normalized.contains("qwen") { return "qwen" }
         if normalized.contains("openai") { return "openai" }
-        if normalized.contains("kral") || normalized.contains("kralai") { return "kral" }
         return nil
     }
 
