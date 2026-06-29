@@ -100,6 +100,10 @@ struct CompactDecisionView: View {
                 .font(.callout)
                 .fixedSize(horizontal: false, vertical: true)
 
+            if let recommendation = decision.smartRoutingRecommendation {
+                CompactSmartRoutingRecommendationView(recommendation: recommendation)
+            }
+
             Button {
                 appState.runPolicyCheck()
             } label: {
@@ -118,6 +122,28 @@ struct CompactDecisionView: View {
         case .warn: appState.localized("decisionWarn")
         case .block: appState.localized("decisionBlock")
         }
+    }
+}
+
+private struct CompactSmartRoutingRecommendationView: View {
+    @EnvironmentObject private var appState: AppState
+    var recommendation: SmartRoutingRecommendation
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label(appState.localized("smartRouting"), systemImage: "point.3.connected.trianglepath.dotted")
+                .font(.caption.weight(.semibold))
+            Text("\(recommendation.providerID) / \(recommendation.model)")
+                .font(.caption.monospaced().weight(.medium))
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Text("\(appState.localized("confidence")) \(Int(recommendation.confidence * 100))% · \(appState.localized("evidence")) \(recommendation.evidenceRunCount)")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .padding(8)
+        .background(Color.accentColor.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 }
 

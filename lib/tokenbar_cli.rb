@@ -1793,6 +1793,14 @@ module TokenBarCLI
     puts
     puts "Recommendation:"
     puts decision["recommendation"]
+    smart = decision["smartRouting"]
+    if smart.is_a?(Hash)
+      puts
+      puts "Smart routing:"
+      puts "- Route: #{smart["provider"]}/#{smart["model"]}"
+      puts "- Confidence: #{(smart["confidence"].to_f * 100).round}% · evidence #{smart["evidenceRunCount"].to_i} runs · win rate #{(smart["winRate"].to_f * 100).round}%"
+      puts "- Reason: #{smart["reason"]}"
+    end
   end
 
   def print_usage_ingest(response)

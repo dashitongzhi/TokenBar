@@ -14,9 +14,17 @@ final class AppState: ObservableObject {
         didSet { savePreferencesAndNotify() }
     }
 
+    @Published var routingMode: RoutingMode {
+        didSet {
+            rebuildPolicyInput()
+            savePreferencesAndNotify()
+        }
+    }
+
     @Published var selectedProviderID: String {
         didSet {
             markExplicitSelection(\.hasExplicitSelectedProviderPreference)
+            rebuildPolicyInput()
             savePreferencesAndNotify()
         }
     }
@@ -158,6 +166,7 @@ final class AppState: ObservableObject {
         hasExplicitSelectedModelPreference = savedPreferences.hasSelectedModelPreference
         language = savedPreferences.language
         statusBarContent = savedPreferences.statusBarContent
+        routingMode = savedPreferences.routingMode
         selectedMainSection = savedPreferences.selectedMainSection
         selectedProviderID = savedPreferences.selectedProviderID
         selectedWorkspaceID = savedPreferences.selectedWorkspaceID
@@ -511,7 +520,7 @@ final class AppState: ObservableObject {
     }
 
     func evaluatePolicy(input: PolicyEvaluationInput, shouldRecord: Bool = true) -> PolicyDecision {
-        let decision = PolicyEngine.evaluate(
+        var decision = PolicyEngine.evaluate(
             input: input,
             workspaces: workspacePolicies,
             selectedWorkspace: selectedWorkspace,
@@ -519,6 +528,10 @@ final class AppState: ObservableObject {
             projectedSessionSpend: projectedSessionSpend,
             sessionBudget: sessionBudget
         )
+        decision.routingMode = routingMode
+        if routingMode == .smartRouting {
+            applySmartRoutingRecommendation(to: &decision, input: input)
+        }
 
         if shouldRecord {
             recentDecisions.insert(decision, at: 0)
@@ -529,6 +542,157 @@ final class AppState: ObservableObject {
         }
 
         return decision
+    }
+
+    private func applySmartRoutingRecommendation(to decision: inout PolicyDecision, input: PolicyEvaluationInput) {
+        guard let recommendation = smartRoutingRecommendation(for: input) else {
+            decision.reasons.append("Smart Routing is enabled, but no eligible model route is available yet.")
+            return
+        }
+
+        decision.smartRoutingRecommendation = recommendation
+        let routeLabel = "\(providerDisplayName(recommendation.providerID)) / \(recommendation.model)"
+        if decision.status == .block {
+            decision.reasons.append("Smart Routing found \(routeLabel), but the guard policy still blocks this run.")
+            return
+        }
+
+        if recommendation.providerID != input.providerID || recommendation.model != input.model {
+            decision.reasons.append("Smart Routing recommends \(routeLabel).")
+            decision.recommendation = "Smart Routing recommends \(routeLabel). \(recommendation.reason)"
+        } else {
+            decision.reasons.append("Smart Routing agrees with the selected route.")
+        }
+    }
+
+    private func smartRoutingRecommendation(for input: PolicyEvaluationInput) -> SmartRoutingRecommendation? {
+        let workspace = workspacePolicies.first { $0.id == input.workspaceID } ?? selectedWorkspace
+        let allowedProviderIDs = Set(workspace?.allowedProviderIDs ?? providers.map(\.id))
+        let blockedModels = workspace?.blockedModels ?? []
+        let stats = smartRoutingLedgerStore.stats()
+        let candidates = smartRoutingCandidates(input: input, workspace: workspace, stats: stats)
+            .filter { candidate in
+                allowedProviderIDs.contains(candidate.providerID) &&
+                blockedModels.contains(where: { candidate.model.localizedCaseInsensitiveContains($0) }) == false &&
+                candidate.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false &&
+                candidate.model != "unspecified"
+            }
+
+        let scored = candidates.compactMap { candidate -> (candidate: SmartRoutingCandidate, score: Double, route: SmartRoutingRouteStats?)? in
+            let route = bestRouteStats(for: candidate, intent: input.intent, stats: stats.routeStats)
+            if let cap = workspace?.maxEstimatedRunCost, cap > 0, estimatedCost(candidate: candidate, route: route, fallback: input.estimatedCost) > cap {
+                return nil
+            }
+            return (candidate, smartRoutingScore(candidate: candidate, route: route), route)
+        }
+        .sorted {
+            if $0.score != $1.score { return $0.score > $1.score }
+            if ($0.route?.runCount ?? 0) != ($1.route?.runCount ?? 0) { return ($0.route?.runCount ?? 0) > ($1.route?.runCount ?? 0) }
+            return $0.candidate.model.localizedStandardCompare($1.candidate.model) == .orderedAscending
+        }
+
+        guard let best = scored.first else { return nil }
+        let route = best.route
+        let runCount = route?.runCount ?? 0
+        let winRate = route?.winRate ?? 0
+        let cost = estimatedCost(candidate: best.candidate, route: route, fallback: input.estimatedCost)
+        let alternatives = scored.dropFirst().prefix(3).map { "\($0.candidate.providerID)/\($0.candidate.model)" }
+        let reason: String
+        if let route, route.runCount > 0 {
+            reason = "Based on \(route.runCount) recorded \(route.taskIntent) runs with \(Int(route.winRate * 100))% win rate."
+        } else if best.candidate.sourceRank <= 1 {
+            reason = "Based on configured local agent models and current policy constraints."
+        } else {
+            reason = "Based on the current selected route and provider health."
+        }
+
+        return SmartRoutingRecommendation(
+            providerID: best.candidate.providerID,
+            model: best.candidate.model,
+            taskIntent: input.intent,
+            confidence: min(max(best.score, 0.1), 0.95),
+            evidenceRunCount: runCount,
+            winRate: winRate,
+            estimatedCost: cost,
+            reason: reason,
+            alternatives: alternatives
+        )
+    }
+
+    private func smartRoutingCandidates(input: PolicyEvaluationInput, workspace: WorkspacePolicy?, stats: SmartRoutingStatsSnapshot) -> [SmartRoutingCandidate] {
+        var candidates: [SmartRoutingCandidate] = []
+
+        func add(providerID: String?, model: String?, sourceRank: Int) {
+            let provider = normalizedProviderID(providerID, model: model, agent: input.agent)
+            let model = normalizedModel(model, providerID: provider)
+            guard model != "unspecified" else { return }
+            candidates.append(SmartRoutingCandidate(providerID: provider, model: model, sourceRank: sourceRank))
+        }
+
+        add(providerID: input.providerID, model: input.model, sourceRank: 2)
+        add(providerID: workspace?.preferredProviderID, model: workspace?.preferredModel, sourceRank: 0)
+        for row in modelUsageRollups {
+            add(providerID: row.providerID, model: row.model, sourceRank: row.source == .localAgent ? 0 : 1)
+        }
+        for item in modelCatalogItems {
+            add(providerID: item.providerID, model: item.modelID, sourceRank: item.source == .localAgentConfig ? 1 : 2)
+        }
+        for route in stats.routeStats.prefix(30) {
+            add(providerID: route.providerID, model: route.model, sourceRank: 0)
+        }
+
+        var seen = Set<String>()
+        return candidates.filter { candidate in
+            let key = "\(candidate.providerID)|\(candidate.model.lowercased())"
+            guard seen.contains(key) == false else { return false }
+            seen.insert(key)
+            return true
+        }
+    }
+
+    private func bestRouteStats(for candidate: SmartRoutingCandidate, intent: String, stats: [SmartRoutingRouteStats]) -> SmartRoutingRouteStats? {
+        stats
+            .filter { route in
+                route.providerID == candidate.providerID &&
+                route.model.caseInsensitiveCompare(candidate.model) == .orderedSame
+            }
+            .sorted {
+                let lhsExact = $0.taskIntent.caseInsensitiveCompare(intent) == .orderedSame
+                let rhsExact = $1.taskIntent.caseInsensitiveCompare(intent) == .orderedSame
+                if lhsExact != rhsExact { return lhsExact }
+                if $0.runCount != $1.runCount { return $0.runCount > $1.runCount }
+                return $0.winRate > $1.winRate
+            }
+            .first
+    }
+
+    private func smartRoutingScore(candidate: SmartRoutingCandidate, route: SmartRoutingRouteStats?) -> Double {
+        var score = max(0.1, 0.35 - Double(candidate.sourceRank) * 0.07)
+        if let route {
+            score = 0.35 + route.winRate * 0.45 + min(Double(route.runCount) / 10, 1) * 0.15 - route.followUpRate * 0.2
+        }
+        if let provider = providers.first(where: { $0.id == candidate.providerID }) {
+            switch provider.status {
+            case .healthy: score += 0.08
+            case .warning: score -= 0.04
+            case .critical: score -= 0.16
+            }
+        }
+        return score
+    }
+
+    private func estimatedCost(candidate: SmartRoutingCandidate, route: SmartRoutingRouteStats?, fallback: Double) -> Double {
+        if let route, route.runCount > 0, route.actualCostTotal > 0 {
+            return route.actualCostTotal / Double(route.runCount)
+        }
+        if candidate.providerID == selectedProviderID && candidate.model == selectedModel {
+            return fallback
+        }
+        return 0
+    }
+
+    private func providerDisplayName(_ providerID: String) -> String {
+        providers.first { $0.id == providerID }?.name ?? providerID
     }
 
     func updateWorkspaceMaxEstimatedRunCost(id: String, value: Double) {
@@ -716,6 +880,7 @@ final class AppState: ObservableObject {
         preferencesStore.save(AppPreferencesSnapshot(
             language: language,
             statusBarContent: statusBarContent,
+            routingMode: routingMode,
             selectedMainSection: selectedMainSection,
             selectedProviderID: selectedProviderID,
             selectedWorkspaceID: selectedWorkspaceID,
@@ -1597,6 +1762,12 @@ final class AppState: ObservableObject {
         }
     }
 
+}
+
+private struct SmartRoutingCandidate {
+    var providerID: String
+    var model: String
+    var sourceRank: Int
 }
 
 extension Notification.Name {

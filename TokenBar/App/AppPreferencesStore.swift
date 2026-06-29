@@ -3,6 +3,7 @@ import Foundation
 struct AppPreferencesSnapshot {
     var language: AppLanguage
     var statusBarContent: StatusBarContent
+    var routingMode: RoutingMode
     var selectedMainSection: MainSection
     var selectedProviderID: String
     var selectedWorkspaceID: String
@@ -41,6 +42,7 @@ struct AppPreferencesStore {
         return AppPreferencesSnapshot(
             language: AppLanguage(rawValue: preferences.string(forKey: "language") ?? "") ?? .english,
             statusBarContent: StatusBarContent(rawValue: preferences.string(forKey: "statusBarContent") ?? "") ?? .iconOnly,
+            routingMode: RoutingMode(rawValue: preferences.string(forKey: "routingMode") ?? "") ?? .guardOnly,
             selectedMainSection: MainSection(rawValue: preferences.string(forKey: "selectedMainSection") ?? "") ?? .guardrail,
             selectedProviderID: preferences.string(forKey: "selectedProviderID") ?? "openai",
             selectedWorkspaceID: preferences.string(forKey: "selectedWorkspaceID") ?? "local-workspace",
@@ -65,6 +67,7 @@ struct AppPreferencesStore {
         preferences.set(snapshot.language.rawValue, forKey: "language")
         preferences.set(snapshot.selectedMainSection.rawValue, forKey: "selectedMainSection")
         preferences.set(snapshot.statusBarContent.rawValue, forKey: "statusBarContent")
+        preferences.set(snapshot.routingMode.rawValue, forKey: "routingMode")
         saveOptionalPreference(snapshot.selectedProviderID, hasExplicitValue: snapshot.hasSelectedProviderPreference, key: "selectedProviderID")
         saveOptionalPreference(snapshot.selectedWorkspaceID, hasExplicitValue: snapshot.hasSelectedWorkspacePreference, key: "selectedWorkspaceID")
         saveOptionalPreference(snapshot.selectedAgent.rawValue, hasExplicitValue: snapshot.hasSelectedAgentPreference, key: "selectedAgent")

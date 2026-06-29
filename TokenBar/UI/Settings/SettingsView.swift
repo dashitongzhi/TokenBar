@@ -43,6 +43,12 @@ private struct GeneralSettingsView: View {
                     }
                 }
 
+                Picker(appState.localized("routingMode"), selection: $appState.routingMode) {
+                    ForEach(RoutingMode.allCases) { mode in
+                        Label(mode.title(language: appState.language), systemImage: mode.symbolName).tag(mode)
+                    }
+                }
+
                 Picker(appState.localized("provider"), selection: $appState.selectedProviderID) {
                     ForEach(appState.providers) { provider in
                         Text(provider.name).tag(provider.id)

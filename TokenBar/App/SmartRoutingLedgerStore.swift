@@ -99,7 +99,7 @@ struct SmartRoutingLedgerStore {
         return Array(records.filter { $0.occurredAt >= cutoff }.suffix(maxRecords))
     }
 
-    private static func routeKey(_ record: SmartRoutingRunRecord) -> String {
+    private nonisolated static func routeKey(_ record: SmartRoutingRunRecord) -> String {
         [record.providerID, record.model.lowercased(), record.taskIntent.lowercased()].joined(separator: "|")
     }
 
