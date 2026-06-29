@@ -127,6 +127,31 @@ enum UsageDataSource: String, Codable {
     case error
 }
 
+enum ModelUsageSource: String, Codable {
+    case localAgent
+    case configured
+}
+
+enum ModelCatalogSource: String, Codable {
+    case providerAPI
+    case ccSwitchConfig
+    case localAgentConfig
+}
+
+struct ModelCatalogItem: Identifiable, Codable, Equatable {
+    var providerID: String
+    var modelID: String
+    var displayName: String
+    var source: ModelCatalogSource
+    var baseURL: String?
+    var configPath: String?
+    var fetchedAt: Date
+
+    var id: String {
+        [providerID, modelID.lowercased(), source.rawValue, baseURL ?? "", configPath ?? ""].joined(separator: "|")
+    }
+}
+
 struct UsagePoint: Identifiable, Codable, Equatable {
     var id = UUID()
     var timestamp: Date
@@ -341,11 +366,13 @@ struct ProviderUsage: Identifiable, Codable, Equatable {
         dataSource = .live
         sourceUpdatedAt = snapshot.fetchedAt
 
-        var detail = "Codex login quota from local ~/.codex/auth.json and ChatGPT wham usage. 5-hour window is \(Int(snapshot.primaryUsedPercent))% used."
+        let primaryLabel = Self.quotaWindowLabel(seconds: snapshot.primaryWindowSeconds, fallback: "5-hour window")
+        var detail = "Codex login quota from local ~/.codex/auth.json and ChatGPT wham usage. \(primaryLabel) is \(Int(snapshot.primaryUsedPercent))% used."
         if let secondaryUsedPercent = snapshot.secondaryUsedPercent, let secondaryResetAt = snapshot.secondaryResetAt {
             let formatter = RelativeDateTimeFormatter()
             formatter.unitsStyle = .short
-            detail += " 7-day window is \(Int(secondaryUsedPercent))% used and resets \(formatter.localizedString(for: secondaryResetAt, relativeTo: snapshot.fetchedAt))."
+            let secondaryLabel = Self.quotaWindowLabel(seconds: snapshot.secondaryWindowSeconds, fallback: "7-day window")
+            detail += " \(secondaryLabel) is \(Int(secondaryUsedPercent))% used and resets \(formatter.localizedString(for: secondaryResetAt, relativeTo: snapshot.fetchedAt))."
         }
         if let planType = snapshot.planType, planType.isEmpty == false {
             detail += " Plan: \(planType.uppercased())."
@@ -357,24 +384,34 @@ struct ProviderUsage: Identifiable, Codable, Equatable {
     }
 
     mutating func apply(snapshot: CCSwitchProviderUsageSnapshot) {
-        current = snapshot.tokenTotalMonth
-        limit = 0
-        unit = "tokens"
+        if let quotaWindow = Self.primaryQuotaWindow(from: snapshot.quotaWindows),
+           quotaWindow.hasKnownIntervalLimit || quotaWindow.hasKnownWeeklyLimit {
+            current = quotaWindow.intervalUsedPercent
+            limit = 100
+            unit = "percent"
+            quotaLimitKnown = true
+            resetAt = quotaWindow.intervalResetAt
+            history = [UsagePoint(timestamp: snapshot.fetchedAt, value: quotaWindow.intervalUsedPercent)]
+        } else {
+            current = snapshot.tokenTotalMonth
+            limit = snapshot.monthlySpendLimit ?? 0
+            unit = "tokens"
+            quotaLimitKnown = false
+            resetAt = snapshot.monthResetAt
+            history = snapshot.history.isEmpty
+                ? [UsagePoint(timestamp: snapshot.fetchedAt, value: snapshot.tokenTotalMonth)]
+                : snapshot.history
+        }
         tokensToday = snapshot.tokenTotalToday
         requestCountToday = snapshot.requestCountToday
         requestCountMonth = snapshot.requestCountMonth
         currencyCode = "USD"
-        quotaLimitKnown = false
         requestCountKnown = true
         spendTodayKnown = true
         spendMonthKnown = true
         spendToday = snapshot.spendToday
         spendMonth = snapshot.spendMonth
-        resetAt = snapshot.monthResetAt
         lastUpdated = snapshot.fetchedAt
-        history = snapshot.history.isEmpty
-            ? [UsagePoint(timestamp: snapshot.fetchedAt, value: snapshot.tokenTotalMonth)]
-            : snapshot.history
         dataSource = .ccSwitch
         sourceUpdatedAt = snapshot.fetchedAt
         sourceDetail = snapshot.sourceDetail
@@ -483,6 +520,26 @@ struct ProviderUsage: Identifiable, Codable, Equatable {
         sourceUpdatedAt = now
         lastUpdated = now
     }
+
+    private static func primaryQuotaWindow(from windows: [CCSwitchQuotaWindow]) -> CCSwitchQuotaWindow? {
+        windows.first(where: { $0.modelName == "general" && ($0.hasKnownIntervalLimit || $0.hasKnownWeeklyLimit) })
+            ?? windows.first(where: { $0.hasKnownIntervalLimit || $0.hasKnownWeeklyLimit })
+            ?? windows.first
+    }
+
+    private static func quotaWindowLabel(seconds: TimeInterval?, fallback: String) -> String {
+        guard let seconds, seconds > 0 else { return fallback }
+        if seconds >= 86_400 {
+            let days = max(Int(round(seconds / 86_400)), 1)
+            return days == 1 ? "1-day window" : "\(days)-day window"
+        }
+        if seconds >= 3_600 {
+            let hours = max(Int(round(seconds / 3_600)), 1)
+            return hours == 1 ? "1-hour window" : "\(hours)-hour window"
+        }
+        let minutes = max(Int(round(seconds / 60)), 1)
+        return minutes == 1 ? "1-minute window" : "\(minutes)-minute window"
+    }
 }
 
 struct LocalAgentUsageIngest: Codable, Equatable {
@@ -531,6 +588,135 @@ struct LocalAgentUsageAppliedSnapshot: Equatable {
     var rateLimitResetAt: Date?
     var occurredAt: Date
     var sourceDetail: String
+}
+
+enum SmartRoutingRunSignal: String, Codable {
+    case success
+    case followUp
+    case failed
+    case unknown
+}
+
+struct SmartRoutingRunInput: Codable, Equatable {
+    var agent: AgentProvider?
+    var taskIntent: String?
+    var providerID: String?
+    var model: String?
+    var workspaceID: String?
+    var workspaceName: String?
+    var workspacePath: String?
+    var sessionID: String?
+    var taskID: String?
+    var estimatedCost: Double?
+    var actualCost: Double?
+    var estimatedTokens: Int?
+    var actualTokens: Int?
+    var inputTokens: Int?
+    var outputTokens: Int?
+    var requestCount: Int?
+    var signal: SmartRoutingRunSignal?
+    var followUpRequired: Bool?
+    var selectedBy: String?
+    var alternatives: [String]?
+    var routingReason: String?
+    var metadata: [String: String]?
+    var occurredAt: Date?
+}
+
+struct SmartRoutingRunRecord: Identifiable, Codable, Equatable {
+    var id: UUID
+    var recordedAt: Date
+    var occurredAt: Date
+    var agent: AgentProvider
+    var taskIntent: String
+    var providerID: String
+    var model: String
+    var workspaceID: String?
+    var workspaceName: String?
+    var workspacePath: String?
+    var sessionID: String?
+    var taskID: String?
+    var estimatedCost: Double
+    var actualCost: Double
+    var estimatedTokens: Int
+    var actualTokens: Int
+    var inputTokens: Int?
+    var outputTokens: Int?
+    var requestCount: Int?
+    var signal: SmartRoutingRunSignal
+    var followUpRequired: Bool
+    var selectedBy: String?
+    var alternatives: [String]
+    var routingReason: String?
+    var metadata: [String: String]
+
+    var isWin: Bool {
+        signal == .success && followUpRequired == false
+    }
+}
+
+struct SmartRoutingRouteStats: Identifiable, Codable, Equatable {
+    var id: String { routeKey }
+    var routeKey: String
+    var providerID: String
+    var model: String
+    var taskIntent: String
+    var runCount: Int
+    var winCount: Int
+    var followUpCount: Int
+    var failedCount: Int
+    var unknownCount: Int
+    var winRate: Double
+    var followUpRate: Double
+    var estimatedCostTotal: Double
+    var actualCostTotal: Double
+    var estimatedTokensTotal: Int
+    var actualTokensTotal: Int
+    var averageCostDelta: Double
+    var averageTokenDelta: Double
+    var lastRunAt: Date
+}
+
+struct SmartRoutingStatsSnapshot: Codable, Equatable {
+    var generatedAt: Date
+    var totalRuns: Int
+    var winCount: Int
+    var followUpCount: Int
+    var failedCount: Int
+    var unknownCount: Int
+    var winRate: Double
+    var followUpRate: Double
+    var estimatedCostTotal: Double
+    var actualCostTotal: Double
+    var estimatedTokensTotal: Int
+    var actualTokensTotal: Int
+    var routeStats: [SmartRoutingRouteStats]
+    var recentRuns: [SmartRoutingRunRecord]
+}
+
+struct ModelUsageRollup: Identifiable, Codable, Equatable {
+    var agent: AgentProvider
+    var providerID: String
+    var model: String
+    var source: ModelUsageSource
+    var configPath: String?
+    var spendToday: Double
+    var spendMonth: Double
+    var tokensToday: Double
+    var tokensMonth: Double
+    var requestCountToday: Int
+    var requestCountMonth: Int
+    var dayKey: String
+    var monthKey: String
+    var lastUpdated: Date
+
+    var id: String {
+        [agent.rawValue, providerID, model.lowercased(), source.rawValue, configPath ?? ""].joined(separator: "|")
+    }
+
+    var hasUsage: Bool {
+        spendMonth > 0 || tokensMonth > 0 || requestCountMonth > 0
+    }
 }
 
 enum APIMonitorCapability: String, Codable {
@@ -648,6 +834,11 @@ struct WorkspacePolicy: Identifiable, Codable, Equatable {
     var blockedModels: [String]
     var maxEstimatedRunCost: Double
     var requireCompanyKey: Bool
+    var preferredProviderID: String? = nil
+    var preferredModel: String? = nil
+    var setupSourceDetail: String? = nil
+    var configuredModelCount: Int? = nil
+    var inferredFromPaths: [String]? = nil
 
     var dailyRatio: Double {
         guard dailyBudget > 0 else { return 0 }
@@ -661,6 +852,20 @@ struct WorkspacePolicy: Identifiable, Codable, Equatable {
     }
 }
 
+struct WorkspacePolicyInference: Equatable {
+    var allowedProviderIDs: [String]
+    var preferredProviderID: String
+    var preferredModel: String
+    var maxEstimatedRunCost: Double
+    var setupSourceDetail: String
+    var configuredModelCount: Int
+    var inferredFromPaths: [String]
+
+    var hasSignals: Bool {
+        configuredModelCount > 0 || inferredFromPaths.isEmpty == false
+    }
+}
+
 struct PolicyEvaluationInput: Codable, Equatable {
     var agent: AgentProvider
     var workspaceID: String
@@ -670,6 +875,17 @@ struct PolicyEvaluationInput: Codable, Equatable {
     var estimatedTokens: Int
     var keySource: String? = nil
     var intent: String
+    var workspaceName: String? = nil
+    var workspacePath: String? = nil
+    var workspaceClient: String? = nil
+    var dailyBudget: Double? = nil
+    var monthlyBudget: Double? = nil
+    var maxEstimatedRunCost: Double? = nil
+    var allowedProviderIDs: [String]? = nil
+    var blockedModels: [String]? = nil
+    var requireCompanyKey: Bool? = nil
+    var preferredProviderID: String? = nil
+    var preferredModel: String? = nil
 }
 
 struct PolicyDecision: Identifiable, Codable, Equatable {

@@ -70,9 +70,8 @@ final class LocalAPIServer {
         do {
             _ = tokenStore.token()
             let parameters = NWParameters.tcp
-            parameters.allowLocalEndpointReuse = true
-            parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(IPv4Address("127.0.0.1")!), port: endpointPort)
-            let listener = try NWListener(using: parameters)
+            parameters.requiredInterfaceType = .loopback
+            let listener = try NWListener(using: parameters, on: endpointPort)
             listener.stateUpdateHandler = { [weak self, weak listener] state in
                 guard let self, let listener else { return }
                 Task { @MainActor [self, listener] in
@@ -205,6 +204,19 @@ final class LocalAPIServer {
             return .json(appState.ingestClaudeStatuslineJSON(data: request.body))
         }
 
+        if request.path == "/routing/runs" {
+            guard request.method == "POST" else { return methodNotAllowed(["POST"]) }
+            guard let input = smartRoutingRunInput(from: request.body) else {
+                return .error("invalid_smart_routing_run_input", statusCode: 400, reason: "Bad Request")
+            }
+            return .json(appState.recordSmartRoutingRunJSON(input: input))
+        }
+
+        if request.path == "/routing/stats" {
+            guard request.method == "GET" else { return methodNotAllowed(["GET"]) }
+            return .json(appState.smartRoutingStatsJSON())
+        }
+
         if request.path == "/quotas" {
             guard request.method == "GET" else { return methodNotAllowed(["GET"]) }
             return .json(appState.mcpSnapshotJSON())
@@ -249,6 +261,10 @@ final class LocalAPIServer {
 
     private func localAgentUsageInput(from data: Data) -> LocalAgentUsageIngest? {
         return try? JSONDecoder.tokenBar.decode(LocalAgentUsageIngest.self, from: data)
+    }
+
+    private func smartRoutingRunInput(from data: Data) -> SmartRoutingRunInput? {
+        return try? JSONDecoder.tokenBar.decode(SmartRoutingRunInput.self, from: data)
     }
 
     private nonisolated static func parseRequest(data: Data) -> HTTPRequest? {

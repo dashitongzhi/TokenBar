@@ -13,15 +13,23 @@ struct AuditEventStore {
     }
 
     func load(defaults: [AuditEvent]) -> [AuditEvent] {
-        guard let data = try? Data(contentsOf: storeURL),
-              let saved = try? JSONDecoder.tokenBar.decode([AuditEvent].self, from: data) else {
+        guard let data = try? Data(contentsOf: storeURL) else {
             return Self.pruned(defaults, limit: limit)
         }
-        return Self.pruned(saved, limit: limit)
+        guard let saved = try? JSONDecoder.tokenBar.decode([AuditEvent].self, from: data) else {
+            let cleanedDefaults = Self.pruned(defaults, limit: limit)
+            save(cleanedDefaults)
+            return cleanedDefaults
+        }
+        let cleaned = Self.pruned(Self.removingDemoEvents(saved), limit: limit)
+        if cleaned.count != saved.count {
+            save(cleaned)
+        }
+        return cleaned
     }
 
     func save(_ events: [AuditEvent]) {
-        guard let data = try? JSONEncoder.tokenBar.encode(Self.pruned(events, limit: limit)) else { return }
+        guard let data = try? JSONEncoder.tokenBar.encode(Self.pruned(Self.removingDemoEvents(events), limit: limit)) else { return }
         try? data.write(to: storeURL, options: [.atomic])
     }
 
@@ -30,4 +38,21 @@ struct AuditEventStore {
         guard sorted.count > limit else { return sorted }
         return Array(sorted.prefix(limit))
     }
+
+    private static func removingDemoEvents(_ events: [AuditEvent]) -> [AuditEvent] {
+        events.filter { event in
+            demoEventMarkers.contains { marker in
+                event.detail.localizedCaseInsensitiveContains(marker)
+                    || event.provider.localizedCaseInsensitiveContains(marker)
+            } == false
+        }
+    }
+
+    private static let demoEventMarkers = [
+        "Client App",
+        "Personal Lab",
+        "Production Fix",
+        "Ship Client",
+        "claude-opus"
+    ]
 }

@@ -125,12 +125,12 @@ Evaluate a proposed agent run:
 
 ```bash
 ./bin/tokenbar check \
-  --agent claudeCode \
-  --provider anthropic \
-  --model claude-opus \
-  --estimated-cost 2.40 \
-  --estimated-tokens 180000 \
-  --intent refactor
+  --agent codex \
+  --provider openai \
+  --model gpt-5 \
+  --estimated-cost 0 \
+  --estimated-tokens 0 \
+  --intent implement
 ```
 
 `tokenbar check` exits with product-plan status codes:
@@ -162,6 +162,19 @@ TokenBar includes a dependency-free local CLI at `bin/tokenbar`.
 ./bin/tokenbar usage codex-session \
   --transcript ~/.codex/sessions/2026/06/17/rollout-example.jsonl
 
+./bin/tokenbar routing record \
+  --agent codex \
+  --intent implementation \
+  --provider openai \
+  --model gpt-5 \
+  --estimated-cost 0.40 \
+  --actual-cost 0.33 \
+  --estimated-tokens 42000 \
+  --actual-tokens 38000 \
+  --success
+
+./bin/tokenbar routing stats
+
 printf '{"model":"gpt-5","prompt":"Fix the failing tests and update docs."}' | \
   ./bin/tokenbar check --agent codex --provider openai --codex-hook-json --json
 
@@ -180,7 +193,7 @@ Use `tokenbar policy init` from a repo root to scaffold a project-local policy:
 tokenbar policy init
 ```
 
-It writes `./tokenbar.yml` with a workspace id and name inferred from the current directory, the absolute path, conservative starter budgets, provider allowlists, blocked high-cost model families, and company-key enforcement.
+It writes `./tokenbar.yml` with a workspace id and name inferred from the current directory, the absolute path, conservative starter budgets, and a provider/model policy inferred from local agent configuration. TokenBar reads Codex, Claude Code, and CC Switch model settings when present, chooses a preferred provider plus `models.default`, and uses the same inference for the first-run app workspace.
 
 Example:
 
@@ -188,29 +201,35 @@ Example:
 version: 1
 
 workspace:
-  id: client-app
-  name: Client App
-  path: ~/project/client-app
-  client: acme
+  id: local-workspace
+  name: Local Workspace
+  path: ~/project/current
+  client: local
 
 budgets:
   daily: 8.00
   monthly: 160.00
   max_run: 1.50
-  spend_today: 4.70
+  spend_today: 0.00
+  spend_month: 0.00
 
 providers:
   allowed:
-    - anthropic
     - openai
+    - anthropic
     - openrouter
-  preferred: anthropic
-  require_company_key: true
+  preferred: openai
+  require_company_key: false
 
 models:
-  blocked:
-    - opus
-    - gpt-5-pro
+  default: gpt-5
+  blocked: []
+
+setup:
+  source: local_agent_config
+  configured_models: 2
+  inferred_from:
+    - ~/.codex/config.toml
 ```
 
 ## Local API
@@ -244,13 +263,13 @@ curl -X POST http://127.0.0.1:3847/policy/evaluate \
   -H "Authorization: Bearer $TOKENBAR_API_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{
-    "agent": "claudeCode",
-    "workspaceID": "client-app",
-    "providerID": "anthropic",
-    "model": "claude-opus",
-    "estimatedCost": 2.4,
-    "estimatedTokens": 180000,
-    "intent": "refactor"
+    "agent": "codex",
+    "workspaceID": "local-workspace",
+    "providerID": "openai",
+    "model": "gpt-5",
+    "estimatedCost": 0,
+    "estimatedTokens": 0,
+    "intent": "implement"
   }'
 ```
 
@@ -259,16 +278,14 @@ Example response:
 ```json
 {
   "decision": {
-    "status": "block",
-    "agent": "Claude Code",
-    "provider": "anthropic",
-    "model": "claude-opus",
+    "status": "allow",
+    "agent": "Codex",
+    "provider": "openai",
+    "model": "gpt-5",
     "reasons": [
-      "Model is blocked by the workspace policy.",
-      "Estimated run cost is above the per-run cap.",
-      "Projected daily spend would exceed the workspace budget."
+      "Workspace, provider, model, and budget are inside policy."
     ],
-    "recommendation": "Stop this run. Switch provider/model or raise the workspace budget after review."
+    "recommendation": "Continue with gpt-5. Keep the agent on this workspace policy."
   },
   "localOnly": true
 }
@@ -309,6 +326,8 @@ For Codex `UserPromptSubmit`, `TOKENBAR_PROVIDER`, `TOKENBAR_MODEL`, `TOKENBAR_E
 
 This means expensive Codex prompts can be stopped before they run: if the estimated prompt/run tokens imply a cost above `budgets.max_run`, or push projected daily spend past the workspace budget, `UserPromptSubmit` returns a Codex block decision. TokenBar's default gate is cost-policy based, not a standalone raw-token ceiling; add an explicit policy rule if a workspace needs to block every run above a fixed token count.
 
+Users do not need to edit `tokenbar.yml` to tune the live threshold. Open TokenBar's Workspaces view and adjust each workspace's Per-run cap with the amount field and +/- controls; the value is stored locally and used by the running localhost policy API. `tokenbar.yml` remains the offline fallback when the app API is unavailable.
+
 For manual Codex checks you can pass prompt text directly:
 
 ```bash
@@ -334,8 +353,8 @@ curl -X POST http://127.0.0.1:3847/usage/ingest \
     "agent": "claudeCode",
     "providerID": "anthropic",
     "model": "claude-sonnet",
-    "workspaceID": "client-app",
-    "sessionID": "demo-session",
+    "workspaceID": "local-workspace",
+    "sessionID": "statusline-session",
     "source": "Claude Code statusline",
     "costUSD": 0.12,
     "totalTokens": 24000,
@@ -434,10 +453,12 @@ Run CLI smoke checks:
 ```bash
 ./bin/tokenbar status
 ./bin/tokenbar usage ingest --agent claudeCode --provider anthropic --model claude-sonnet --session-id smoke --cost-usd 0.12 --total-tokens 24000 --json
+./bin/tokenbar routing record --agent codex --intent smoke --provider openai --model gpt-5 --estimated-cost 0.10 --actual-cost 0.08 --estimated-tokens 12000 --actual-tokens 9500 --success --json
+./bin/tokenbar routing stats --json
 ./bin/tokenbar usage codex-session --transcript /path/to/codex-rollout.jsonl --json
 printf '{"model":"gpt-5","prompt":"Implement the CLI preflight estimate and verify the hook."}' | ./bin/tokenbar check --agent codex --provider openai --codex-hook-json --intent implement --json
 ./bin/tokenbar check --agent codex --provider anthropic --model claude-sonnet --estimated-cost 0.20 --estimated-tokens 12000 --intent debug
-./bin/tokenbar check --agent claudeCode --provider anthropic --model claude-opus --estimated-cost 2.40 --estimated-tokens 180000 --intent refactor
+./bin/tokenbar check --agent codex --provider openai --model gpt-5 --estimated-cost 0 --estimated-tokens 0 --intent implement
 ```
 
 ## Release Packaging

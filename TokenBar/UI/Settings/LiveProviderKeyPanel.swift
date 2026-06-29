@@ -64,6 +64,7 @@ private struct LiveProviderKeyPanel: View {
     var clearAction: () async throws -> Void
 
     @State private var adminKey = ""
+    @State private var baseURL = ""
     @State private var message = ""
     @State private var isSaving = false
 
@@ -104,6 +105,19 @@ private struct LiveProviderKeyPanel: View {
                 .disabled(appState.isRefreshingUsage)
             }
 
+            HStack(spacing: 8) {
+                TextField(defaultBaseURL, text: $baseURL)
+                    .textFieldStyle(.roundedBorder)
+                    .help(appState.localized("baseURL"))
+
+                Button {
+                    pullModels()
+                } label: {
+                    Label(appState.localized("pullModels"), systemImage: "arrow.down.circle")
+                }
+                .disabled(appState.isRefreshingModelCatalog)
+            }
+
             if message.isEmpty == false {
                 Text(message)
                     .font(.caption)
@@ -119,6 +133,9 @@ private struct LiveProviderKeyPanel: View {
         .padding(14)
         .background(Color(nsColor: .controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 8))
+        .onAppear {
+            baseURL = UserDefaults.standard.string(forKey: baseURLPreferenceKey) ?? defaultBaseURL
+        }
     }
 
     private func save() {
@@ -132,6 +149,7 @@ private struct LiveProviderKeyPanel: View {
                     adminKey = ""
                     message = appState.localized(savedKey)
                     isSaving = false
+                    pullModels()
                 }
             } catch {
                 await MainActor.run {
@@ -157,6 +175,27 @@ private struct LiveProviderKeyPanel: View {
                     isSaving = false
                 }
             }
+        }
+    }
+
+    private func pullModels() {
+        let trimmed = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        UserDefaults.standard.set(trimmed, forKey: baseURLPreferenceKey)
+        appState.refreshModelCatalog(providerID: providerID, baseURL: trimmed.isEmpty ? nil : trimmed)
+        message = appState.localized("modelCatalogRefreshing")
+    }
+
+    private var baseURLPreferenceKey: String {
+        "modelBaseURL.\(providerID)"
+    }
+
+    private var defaultBaseURL: String {
+        switch providerID {
+        case "openai": "https://api.openai.com/v1"
+        case "anthropic": "https://api.anthropic.com/v1"
+        case "openrouter": "https://openrouter.ai/api/v1"
+        case "minimax": "https://api.minimax.io/v1"
+        default: ""
         }
     }
 }

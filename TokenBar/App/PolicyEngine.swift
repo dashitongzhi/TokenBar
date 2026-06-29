@@ -9,7 +9,22 @@ struct PolicyEngine {
         projectedSessionSpend: Double,
         sessionBudget: Double
     ) -> PolicyDecision {
-        let workspace = workspaces.first { $0.id == input.workspaceID } ?? selectedWorkspace ?? workspaces[0]
+        let workspace = workspaces.first { $0.id == input.workspaceID }
+            ?? selectedWorkspace
+            ?? WorkspacePolicy(
+                id: "local-workspace",
+                name: "Local Workspace",
+                pathHint: "~",
+                client: "local",
+                dailyBudget: 0,
+                monthlyBudget: 0,
+                spendToday: 0,
+                spendMonth: 0,
+                allowedProviderIDs: [input.providerID],
+                blockedModels: [],
+                maxEstimatedRunCost: 0,
+                requireCompanyKey: false
+            )
         let provider = providers.first { $0.id == input.providerID }
         let projectedDailySpend = workspace.spendToday + input.estimatedCost
         var status: PolicyDecisionStatus = .allow
@@ -25,7 +40,7 @@ struct PolicyEngine {
             reasons.append("Model is blocked by the workspace policy.")
         }
 
-        if input.estimatedCost > workspace.maxEstimatedRunCost {
+        if workspace.maxEstimatedRunCost > 0 && input.estimatedCost > workspace.maxEstimatedRunCost {
             status = .block
             reasons.append("Estimated run cost is above the per-run cap.")
         }
@@ -35,10 +50,10 @@ struct PolicyEngine {
             reasons.append("Workspace requires a company-managed key.")
         }
 
-        if projectedDailySpend >= workspace.dailyBudget {
+        if workspace.dailyBudget > 0 && projectedDailySpend >= workspace.dailyBudget {
             status = .block
             reasons.append("Projected daily spend would exceed the workspace budget.")
-        } else if projectedDailySpend >= workspace.dailyBudget * 0.8 && status != .block {
+        } else if workspace.dailyBudget > 0 && projectedDailySpend >= workspace.dailyBudget * 0.8 && status != .block {
             status = .warn
             reasons.append("Projected daily spend is close to the workspace budget.")
         }
@@ -48,7 +63,7 @@ struct PolicyEngine {
             reasons.append("\(provider.name) is near its quota or reset window.")
         }
 
-        if projectedSessionSpend >= sessionBudget && status != .block {
+        if sessionBudget > 0 && projectedSessionSpend >= sessionBudget && status != .block {
             status = .warn
             reasons.append("Current session budget will be tight after this run.")
         }

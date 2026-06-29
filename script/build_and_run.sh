@@ -72,7 +72,7 @@ pid_has_local_api_listener() {
   local pid="$1"
   local listeners
   listeners="$(lsof -nP -a -p "$pid" -iTCP:"$APP_PORT" -sTCP:LISTEN 2>/dev/null)" || return 1
-  grep -qE "TCP 127\\.0\\.0\\.1:$APP_PORT .*\\(LISTEN\\)" <<<"$listeners"
+  grep -qE "TCP (127\\.0\\.0\\.1|\\*):$APP_PORT .*\\(LISTEN\\)" <<<"$listeners"
 }
 
 health_check_ok() {
@@ -217,6 +217,7 @@ xcodebuild \
   -configuration Debug \
   -derivedDataPath "$DERIVED_DATA" \
   ENABLE_DEBUG_DYLIB=NO \
+  CODE_SIGNING_ALLOWED="${TOKENBAR_CODE_SIGNING_ALLOWED:-NO}" \
   build
 
 open_app() {

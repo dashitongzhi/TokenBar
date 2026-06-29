@@ -91,32 +91,36 @@ final class AppState: ObservableObject {
     @Published private(set) var apiMonitors: [APIMonitorSpec] = APIMonitorCatalog.all
     @Published private(set) var workspacePolicies: [WorkspacePolicy] = []
     @Published private(set) var currentPolicyInput = PolicyEvaluationInput(
-        agent: .claudeCode,
-        workspaceID: "ship",
-        providerID: "anthropic",
-        model: "claude-opus",
-        estimatedCost: 1.2,
-        estimatedTokens: 120_000,
+        agent: .codex,
+        workspaceID: "local-workspace",
+        providerID: "openai",
+        model: "gpt-5",
+        estimatedCost: 0,
+        estimatedTokens: 0,
         intent: "code"
     )
     @Published private(set) var currentDecision = PolicyDecision(
         timestamp: .now,
-        status: .warn,
-        agent: .claudeCode,
-        workspaceID: "ship",
-        workspaceName: "Ship Client",
-        providerID: "anthropic",
-        model: "claude-opus",
-        estimatedCost: 1.2,
-        projectedDailySpend: 5.9,
-        reasons: ["Workspace budget is close to the daily limit."],
-        recommendation: "Use Sonnet or split the run before continuing.",
-        fallbackProviderID: "openrouter"
+        status: .allow,
+        agent: .codex,
+        workspaceID: "local-workspace",
+        workspaceName: "Local Workspace",
+        providerID: "openai",
+        model: "gpt-5",
+        estimatedCost: 0,
+        projectedDailySpend: 0,
+        reasons: ["Workspace, provider, model, and budget are inside policy."],
+        recommendation: "Continue with gpt-5. Keep the agent on this workspace policy.",
+        fallbackProviderID: "anthropic"
     )
     @Published private(set) var recentDecisions: [PolicyDecision] = []
     @Published private(set) var auditEvents: [AuditEvent] = []
+    @Published private(set) var modelUsageRollups: [ModelUsageRollup] = []
+    @Published private(set) var modelCatalogItems: [ModelCatalogItem] = []
     @Published private(set) var lastRefresh: Date = .now
     @Published private(set) var isRefreshingUsage = false
+    @Published private(set) var isRefreshingModelCatalog = false
+    @Published private(set) var modelCatalogMessage = ""
     @Published private(set) var localAPIStatus: LocalAPIStatus = .stopped
 
     private let preferencesStore = AppPreferencesStore()
@@ -124,15 +128,27 @@ final class AppState: ObservableObject {
     private let workspacePolicyStore = WorkspacePolicyStore()
     private let auditEventStore = AuditEventStore()
     private let localAgentUsageLedgerStore = LocalAgentUsageLedgerStore()
+    private let smartRoutingLedgerStore = SmartRoutingLedgerStore()
+    private let localModelUsageStore = LocalModelUsageStore()
+    private let agentModelConfigurationService = AgentModelConfigurationService()
+    private let providerModelCatalogService = ProviderModelCatalogService()
     private let openAIUsageService = OpenAIUsageService()
     private let anthropicUsageService = AnthropicUsageService()
     private let openRouterCreditsService = OpenRouterCreditsService()
     private let codexUsageService = CodexUsageService()
     private let miniMaxUsageService = MiniMaxUsageService()
     private let ccSwitchUsageService = CCSwitchUsageService()
+    private var hasExplicitSelectedProviderPreference = false
+    private var hasExplicitSelectedWorkspacePreference = false
+    private var hasExplicitSelectedAgentPreference = false
+    private var hasExplicitSelectedModelPreference = false
 
     private init() {
         let savedPreferences = preferencesStore.load()
+        hasExplicitSelectedProviderPreference = savedPreferences.hasSelectedProviderPreference
+        hasExplicitSelectedWorkspacePreference = savedPreferences.hasSelectedWorkspacePreference
+        hasExplicitSelectedAgentPreference = savedPreferences.hasSelectedAgentPreference
+        hasExplicitSelectedModelPreference = savedPreferences.hasSelectedModelPreference
         language = savedPreferences.language
         statusBarContent = savedPreferences.statusBarContent
         selectedMainSection = savedPreferences.selectedMainSection
@@ -149,9 +165,21 @@ final class AppState: ObservableObject {
         localAPIEnabled = savedPreferences.localAPIEnabled
         selectedAppIcon = savedPreferences.selectedAppIcon
 
+        let configuredModelRows = agentModelConfigurationService.readConfiguredModels()
+        let configuredCatalogItems = agentModelConfigurationService.readConfiguredModelCatalogItems()
+            + ccSwitchUsageService.configuredModelCatalogItems()
+        let inferredPolicy = AgentModelConfigurationService.inferWorkspacePolicy(
+            configuredRows: configuredModelRows,
+            catalogItems: configuredCatalogItems,
+            fallbackPath: UserHomeDirectory.url.path
+        )
+
         providers = providerStore.load(defaults: AppSeedData.providers())
-        workspacePolicies = workspacePolicyStore.load(defaults: AppSeedData.workspacePolicies())
+        workspacePolicies = workspacePolicyStore.load(defaults: AppSeedData.workspacePolicies(inference: inferredPolicy))
         auditEvents = auditEventStore.load(defaults: AppSeedData.auditEvents())
+        normalizeSelectionsAfterLoad()
+        mergeModelUsageRollups(localModelUsageStore.load())
+        mergeModelCatalogItems(configuredCatalogItems, replacingProviderID: nil)
         rebuildPolicyInput()
         currentDecision = evaluatePolicy(input: currentPolicyInput, shouldRecord: false)
         recentDecisions = [currentDecision]
@@ -171,7 +199,8 @@ final class AppState: ObservableObject {
     }
 
     var projectedSessionSpend: Double {
-        sessionSpend + estimatedRunCost
+        guard sessionBudget > 0 else { return 0 }
+        return sessionSpend + estimatedRunCost
     }
 
     var allowedProviderNames: String {
@@ -208,6 +237,19 @@ final class AppState: ObservableObject {
     var budgetRatio: Double {
         guard sessionBudget > 0 else { return 0 }
         return min(sessionSpend / sessionBudget, 1.5)
+    }
+
+    var visibleModelUsageRollups: [ModelUsageRollup] {
+        modelUsageRollups.sorted { lhs, rhs in
+            if lhs.hasUsage != rhs.hasUsage { return lhs.hasUsage }
+            if lhs.spendToday != rhs.spendToday { return lhs.spendToday > rhs.spendToday }
+            if lhs.tokensToday != rhs.tokensToday { return lhs.tokensToday > rhs.tokensToday }
+            return lhs.lastUpdated > rhs.lastUpdated
+        }
+    }
+
+    var selectedProviderModelCatalog: [ModelCatalogItem] {
+        modelCatalog(for: selectedProviderID)
     }
 
     var budgetStatus: UsageStatus {
@@ -303,6 +345,8 @@ final class AppState: ObservableObject {
     func refreshAll() {
         guard isRefreshingUsage == false else { return }
         isRefreshingUsage = true
+        reloadModelUsageRollups()
+        reloadModelCatalogFromLocalSources()
 
         Task {
             async let openAIResult = openAIUsageService.refresh()
@@ -415,6 +459,31 @@ final class AppState: ObservableObject {
         notifyStatusBarUpdate()
     }
 
+    func refreshModelCatalog(providerID: String? = nil, baseURL: String? = nil) {
+        guard isRefreshingModelCatalog == false else { return }
+        let targetProviderID = providerID ?? selectedProviderID
+        isRefreshingModelCatalog = true
+        modelCatalogMessage = localized("modelCatalogRefreshing")
+
+        Task {
+            let remote = await providerModelCatalogService.fetch(providerID: targetProviderID, baseURL: baseURL)
+            await MainActor.run {
+                self.applyModelCatalogResult(remote, providerID: targetProviderID)
+            }
+        }
+    }
+
+    func modelCatalog(for providerID: String) -> [ModelCatalogItem] {
+        modelCatalogItems
+            .filter { $0.providerID == providerID || providerAliases(providerID).contains($0.providerID) }
+            .sorted { lhs, rhs in
+                if lhs.source != rhs.source {
+                    return sourceRank(lhs.source) < sourceRank(rhs.source)
+                }
+                return lhs.modelID.localizedStandardCompare(rhs.modelID) == .orderedAscending
+            }
+    }
+
     func addProvider(template: ProbeTemplate) {
         guard providers.contains(where: { $0.id == template.platform }) == false else { return }
         providers.append(AppSeedData.provider(
@@ -455,11 +524,28 @@ final class AppState: ObservableObject {
         return decision
     }
 
+    func updateWorkspaceMaxEstimatedRunCost(id: String, value: Double) {
+        guard value.isFinite else { return }
+        var updated = workspacePolicies
+        guard let index = updated.firstIndex(where: { $0.id == id }) else { return }
+        updated[index].maxEstimatedRunCost = max(value, 0.01)
+        workspacePolicies = updated
+        persistWorkspacePolicies()
+        rebuildPolicyInput()
+        notifyStatusBarUpdate()
+    }
+
+    func adjustWorkspaceMaxEstimatedRunCost(id: String, delta: Double) {
+        guard let workspace = workspacePolicies.first(where: { $0.id == id }) else { return }
+        updateWorkspaceMaxEstimatedRunCost(id: id, value: workspace.maxEstimatedRunCost + delta)
+    }
+
     func policyJSON() -> Data {
         LocalAPIPayloadBuilder.policyJSON(currentDecision: currentDecision, workspacePolicies: workspacePolicies)
     }
 
     func policyDecisionJSON(input: PolicyEvaluationInput) -> Data {
+        upsertWorkspacePolicy(from: input)
         let decision = evaluatePolicy(input: input)
         currentDecision = decision
         return LocalAPIPayloadBuilder.policyDecisionJSON(decision)
@@ -487,6 +573,24 @@ final class AppState: ObservableObject {
         return ingestLocalAgentUsageJSON(input: input)
     }
 
+    func recordSmartRoutingRunJSON(input: SmartRoutingRunInput) -> Data {
+        let record = smartRoutingLedgerStore.record(
+            input,
+            fallbackWorkspaceID: selectedWorkspaceID,
+            fallbackAgent: selectedAgent
+        )
+        addAudit(
+            provider: record.agent.displayName,
+            action: "routing.\(record.signal.rawValue)",
+            detail: "\(record.taskIntent) · \(record.providerID)/\(record.model) · $\(formatMoney(record.actualCost))"
+        )
+        return LocalAPIPayloadBuilder.smartRoutingRunJSON(record: record)
+    }
+
+    func smartRoutingStatsJSON() -> Data {
+        LocalAPIPayloadBuilder.smartRoutingStatsJSON(snapshot: smartRoutingLedgerStore.stats())
+    }
+
     func mcpSnapshotJSON(filteredProviderID: String? = nil) -> Data {
         LocalAPIPayloadBuilder.mcpSnapshotJSON(providers: providers, filteredProviderID: filteredProviderID)
     }
@@ -507,11 +611,14 @@ final class AppState: ObservableObject {
         case .guardDecision:
             return "\(currentDecision.status.rawValue.uppercased()) \(currentDecision.workspaceName)"
         case .activeWorkspace:
-            return "\(selectedWorkspace?.name ?? "Workspace") $\(formatMoney(selectedWorkspace?.spendToday ?? 0))"
+            guard let selectedWorkspace else { return "Workspace" }
+            return selectedWorkspace.dailyBudget > 0
+                ? "\(selectedWorkspace.name) $\(formatMoney(selectedWorkspace.spendToday))"
+                : selectedWorkspace.name
         case .totalSpend:
-            return "$\(formatMoney(totalSpendMonth))"
+            return totalSpendMonth > 0 ? "$\(formatMoney(totalSpendMonth))" : "TokenBar"
         case .sessionBudget:
-            return "$\(formatMoney(sessionSpend)) / $\(formatMoney(sessionBudget))"
+            return sessionBudget > 0 ? "$\(formatMoney(sessionSpend)) / $\(formatMoney(sessionBudget))" : "TokenBar"
         }
     }
 
@@ -599,6 +706,10 @@ final class AppState: ObservableObject {
     }
 
     private func savePreferencesAndNotify() {
+        hasExplicitSelectedProviderPreference = true
+        hasExplicitSelectedWorkspacePreference = true
+        hasExplicitSelectedAgentPreference = true
+        hasExplicitSelectedModelPreference = true
         preferencesStore.save(AppPreferencesSnapshot(
             language: language,
             statusBarContent: statusBarContent,
@@ -614,9 +725,47 @@ final class AppState: ObservableObject {
             sessionSpend: sessionSpend,
             focusModeEnabled: focusModeEnabled,
             localAPIEnabled: localAPIEnabled,
-            selectedAppIcon: selectedAppIcon
+            selectedAppIcon: selectedAppIcon,
+            hasSelectedProviderPreference: hasExplicitSelectedProviderPreference,
+            hasSelectedWorkspacePreference: hasExplicitSelectedWorkspacePreference,
+            hasSelectedAgentPreference: hasExplicitSelectedAgentPreference,
+            hasSelectedModelPreference: hasExplicitSelectedModelPreference
         ))
         notifyStatusBarUpdate()
+    }
+
+    private func normalizeSelectionsAfterLoad() {
+        if hasExplicitSelectedWorkspacePreference == false,
+           let inferredWorkspace = workspacePolicies.first(where: { $0.preferredProviderID != nil || $0.preferredModel != nil }) {
+            selectedWorkspaceID = inferredWorkspace.id
+        }
+        if providers.contains(where: { $0.id == selectedProviderID }) == false {
+            selectedProviderID = providers.first?.id ?? "openai"
+        }
+        if workspacePolicies.contains(where: { $0.id == selectedWorkspaceID }) == false {
+            selectedWorkspaceID = workspacePolicies.first?.id ?? "local-workspace"
+        }
+        for providerID in workspacePolicies.flatMap(\.allowedProviderIDs) {
+            ensureProviderExists(providerID: providerID)
+        }
+        if hasExplicitSelectedProviderPreference == false,
+           let preferredProviderID = selectedWorkspace?.preferredProviderID,
+           preferredProviderID.isEmpty == false {
+            ensureProviderExists(providerID: preferredProviderID)
+            selectedProviderID = preferredProviderID
+        }
+        if hasExplicitSelectedModelPreference == false,
+           let preferredModel = selectedWorkspace?.preferredModel,
+           preferredModel.isEmpty == false {
+            selectedModel = preferredModel
+        }
+        if hasExplicitSelectedAgentPreference == false {
+            selectedAgent = defaultAgent(providerID: selectedProviderID)
+        }
+        if sessionBudget <= 0 {
+            sessionSpend = 0
+            focusModeEnabled = false
+        }
     }
 
     private func notifyStatusBarUpdate() {
@@ -737,8 +886,11 @@ final class AppState: ObservableObject {
         switch result {
         case .success(let snapshot):
             providers[index].apply(snapshot: snapshot)
-            let secondary = snapshot.secondaryUsedPercent.map { ", 7-day \(Int($0))%" } ?? ""
-            addAudit(provider: "Codex", action: "quota.live", detail: "Fetched Codex quota: 5-hour \(Int(snapshot.primaryUsedPercent))%\(secondary)")
+            let primaryLabel = quotaWindowLabel(seconds: snapshot.primaryWindowSeconds, fallback: "5-hour")
+            let secondary = snapshot.secondaryUsedPercent.map {
+                ", \(quotaWindowLabel(seconds: snapshot.secondaryWindowSeconds, fallback: "7-day")) \(Int($0))%"
+            } ?? ""
+            addAudit(provider: "Codex", action: "quota.live", detail: "Fetched Codex quota: \(primaryLabel) \(Int(snapshot.primaryUsedPercent))%\(secondary)")
         case .unavailable(let detail):
             if providers[index].sourceKind != .localAgent {
                 providers[index].markSource(.liveUnavailable, detail: detail, clearUsage: true)
@@ -794,6 +946,20 @@ final class AppState: ObservableObject {
         case .failure(let detail):
             addAudit(provider: "CC Switch", action: "usage.error", detail: detail)
         }
+    }
+
+    private func quotaWindowLabel(seconds: TimeInterval?, fallback: String) -> String {
+        guard let seconds, seconds > 0 else { return fallback }
+        if seconds >= 86_400 {
+            let days = max(Int(round(seconds / 86_400)), 1)
+            return days == 1 ? "1-day" : "\(days)-day"
+        }
+        if seconds >= 3_600 {
+            let hours = max(Int(round(seconds / 3_600)), 1)
+            return hours == 1 ? "1-hour" : "\(hours)-hour"
+        }
+        let minutes = max(Int(round(seconds / 60)), 1)
+        return minutes == 1 ? "1-minute" : "\(minutes)-minute"
     }
 
     private func ensureOpenAIProviderExists() {
@@ -939,6 +1105,7 @@ final class AppState: ObservableObject {
             action: "usage.local",
             detail: "\(model) · \(providerID) · +$\(formatMoney(delta.costUSD)) · +\(Int(delta.tokens)) tokens"
         )
+        mergeModelUsageRollups(localModelUsageStore.apply(snapshot: snapshot))
         persistProviders()
         persistWorkspacePolicies()
         notifyStatusBarUpdate()
@@ -959,6 +1126,8 @@ final class AppState: ObservableObject {
             workspacePolicies[index].allowedProviderIDs = input.allowedProviderIDs ?? workspacePolicies[index].allowedProviderIDs
             workspacePolicies[index].blockedModels = input.blockedModels ?? workspacePolicies[index].blockedModels
             workspacePolicies[index].requireCompanyKey = input.requireCompanyKey ?? workspacePolicies[index].requireCompanyKey
+            workspacePolicies[index].preferredProviderID = workspacePolicies[index].preferredProviderID ?? providerID
+            workspacePolicies[index].preferredModel = workspacePolicies[index].preferredModel ?? normalizedModel(input.model, providerID: providerID)
         } else {
             var allowedProviderIDs = ["anthropic", "openai", "openrouter"]
             if allowedProviderIDs.contains(providerID) == false {
@@ -969,18 +1138,81 @@ final class AppState: ObservableObject {
                 name: input.workspaceName ?? titleFromWorkspaceID(workspaceID),
                 pathHint: input.workspacePath ?? input.currentDirectory ?? "~",
                 client: input.workspaceClient ?? "local",
-                dailyBudget: input.dailyBudget ?? 8,
-                monthlyBudget: input.monthlyBudget ?? 160,
+                dailyBudget: input.dailyBudget ?? 0,
+                monthlyBudget: input.monthlyBudget ?? 0,
                 spendToday: 0,
                 spendMonth: 0,
                 allowedProviderIDs: input.allowedProviderIDs ?? allowedProviderIDs,
                 blockedModels: input.blockedModels ?? [],
-                maxEstimatedRunCost: input.maxEstimatedRunCost ?? 1.5,
-                requireCompanyKey: input.requireCompanyKey ?? false
+                maxEstimatedRunCost: input.maxEstimatedRunCost ?? 0,
+                requireCompanyKey: input.requireCompanyKey ?? false,
+                preferredProviderID: providerID,
+                preferredModel: normalizedModel(input.model, providerID: providerID),
+                setupSourceDetail: "Created from local agent usage ingestion.",
+                configuredModelCount: nil,
+                inferredFromPaths: [input.transcriptPath, input.currentDirectory].compactMap { $0 }
             ))
         }
 
         return workspaceID
+    }
+
+    private func upsertWorkspacePolicy(from input: PolicyEvaluationInput) {
+        guard input.allowedProviderIDs != nil ||
+            input.blockedModels != nil ||
+            input.dailyBudget != nil ||
+            input.monthlyBudget != nil ||
+            input.maxEstimatedRunCost != nil ||
+            input.requireCompanyKey != nil ||
+            input.workspaceName != nil ||
+            input.workspacePath != nil ||
+            input.preferredProviderID != nil ||
+            input.preferredModel != nil
+        else {
+            return
+        }
+
+        if let index = workspacePolicies.firstIndex(where: { $0.id == input.workspaceID }) {
+            workspacePolicies[index].name = input.workspaceName ?? workspacePolicies[index].name
+            workspacePolicies[index].pathHint = input.workspacePath ?? workspacePolicies[index].pathHint
+            workspacePolicies[index].client = input.workspaceClient ?? workspacePolicies[index].client
+            workspacePolicies[index].dailyBudget = input.dailyBudget ?? workspacePolicies[index].dailyBudget
+            workspacePolicies[index].monthlyBudget = input.monthlyBudget ?? workspacePolicies[index].monthlyBudget
+            workspacePolicies[index].maxEstimatedRunCost = input.maxEstimatedRunCost ?? workspacePolicies[index].maxEstimatedRunCost
+            workspacePolicies[index].allowedProviderIDs = input.allowedProviderIDs ?? workspacePolicies[index].allowedProviderIDs
+            workspacePolicies[index].blockedModels = input.blockedModels ?? workspacePolicies[index].blockedModels
+            workspacePolicies[index].requireCompanyKey = input.requireCompanyKey ?? workspacePolicies[index].requireCompanyKey
+            workspacePolicies[index].preferredProviderID = input.preferredProviderID ?? input.providerID
+            workspacePolicies[index].preferredModel = input.preferredModel ?? input.model
+            workspacePolicies[index].setupSourceDetail = workspacePolicies[index].setupSourceDetail ?? "Updated from tokenbar.yml via local policy check."
+        } else {
+            workspacePolicies.append(WorkspacePolicy(
+                id: input.workspaceID,
+                name: input.workspaceName ?? titleFromWorkspaceID(input.workspaceID),
+                pathHint: input.workspacePath ?? "~",
+                client: input.workspaceClient ?? "local",
+                dailyBudget: input.dailyBudget ?? 0,
+                monthlyBudget: input.monthlyBudget ?? 0,
+                spendToday: 0,
+                spendMonth: 0,
+                allowedProviderIDs: input.allowedProviderIDs ?? [input.providerID],
+                blockedModels: input.blockedModels ?? [],
+                maxEstimatedRunCost: input.maxEstimatedRunCost ?? 0,
+                requireCompanyKey: input.requireCompanyKey ?? false,
+                preferredProviderID: input.preferredProviderID ?? input.providerID,
+                preferredModel: input.preferredModel ?? input.model,
+                setupSourceDetail: "Created from tokenbar.yml via local policy check.",
+                configuredModelCount: nil,
+                inferredFromPaths: [input.workspacePath].compactMap { $0 }
+            ))
+        }
+
+        ensureProviderExists(providerID: input.providerID)
+        for providerID in input.allowedProviderIDs ?? [] {
+            ensureProviderExists(providerID: providerID)
+        }
+        persistWorkspacePolicies()
+        notifyStatusBarUpdate()
     }
 
     private func ensureProviderExists(providerID: String) {
@@ -1049,25 +1281,50 @@ final class AppState: ObservableObject {
         if let provider, provider.isEmpty == false { return provider }
         let model = model?.lowercased() ?? ""
         if model.contains("claude") { return "anthropic" }
-        if model.contains("gpt") || model.contains("o3") || model.contains("o4") { return "openai" }
+        if model.contains("gpt") || model.contains("o1") || model.contains("o3") || model.contains("o4") { return "openai" }
+        if model.contains("minimax") { return "minimax" }
+        if model.contains("deepseek") { return "deepseek" }
+        if model.contains("gemini") { return "google" }
+        if model.contains("mistral") { return "mistral" }
+        if model.contains("kimi") { return "kimi" }
+        if model.contains("mimo") || model.contains("xiaomi") { return "xiaomi-mimo" }
+        if model.contains("glm") { return "glm" }
+        if model.contains("qwen") { return "qwen" }
         switch agent {
         case .claudeCode:
             return "anthropic"
         case .codex:
-            return "codex"
+            return "openai"
         default:
             return selectedProviderID
         }
     }
 
     private func defaultAgent(providerID: String) -> AgentProvider {
-        providerID == "anthropic" ? .claudeCode : .custom
+        switch providerID {
+        case "anthropic":
+            return .claudeCode
+        case "openai":
+            return .codex
+        default:
+            return .custom
+        }
     }
 
     private func normalizedModel(_ model: String?, providerID: String) -> String {
         let value = model?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if value.isEmpty == false { return value }
-        return providerID == "anthropic" ? "claude-sonnet" : "unspecified"
+        switch providerID {
+        case "anthropic": return "claude-sonnet"
+        case "openai": return "gpt-5"
+        case "minimax": return "minimax-m1"
+        case "deepseek": return "deepseek-chat"
+        case "google": return "gemini-2.5-pro"
+        case "mistral": return "mistral-large-latest"
+        case "kimi": return "kimi-k2"
+        case "glm": return "glm-4.5"
+        default: return "unspecified"
+        }
     }
 
     private func localUsageSessionKey(input: LocalAgentUsageIngest, agent: AgentProvider, providerID: String, model: String, workspaceID: String?) -> String {
@@ -1108,6 +1365,95 @@ final class AppState: ObservableObject {
         return parts.joined(separator: " ")
     }
 
+    private func reloadModelUsageRollups() {
+        mergeModelUsageRollups(localModelUsageStore.load())
+    }
+
+    private func reloadModelCatalogFromLocalSources() {
+        let localItems = agentModelConfigurationService.readConfiguredModelCatalogItems()
+            + ccSwitchUsageService.configuredModelCatalogItems()
+        mergeModelCatalogItems(localItems, replacingProviderID: nil)
+    }
+
+    private func applyModelCatalogResult(_ result: ProviderModelCatalogResult, providerID: String) {
+        isRefreshingModelCatalog = false
+        switch result {
+        case .success(let items):
+            mergeModelCatalogItems(items, replacingProviderID: providerID)
+            modelCatalogMessage = items.isEmpty
+                ? localized("modelCatalogEmpty")
+                : String(format: localized("modelCatalogLoadedFormat"), items.count)
+            addAudit(provider: providerID, action: "models.refresh", detail: "Fetched \(items.count) models")
+        case .unavailable(let detail):
+            modelCatalogMessage = detail
+            addAudit(provider: providerID, action: "models.unavailable", detail: detail)
+        case .failure(let detail):
+            modelCatalogMessage = detail
+            addAudit(provider: providerID, action: "models.error", detail: detail)
+        }
+        notifyStatusBarUpdate()
+    }
+
+    private func mergeModelCatalogItems(_ items: [ModelCatalogItem], replacingProviderID: String?) {
+        var merged = modelCatalogItems
+        if let replacingProviderID {
+            let aliases = providerAliases(replacingProviderID).union([replacingProviderID])
+            merged.removeAll { aliases.contains($0.providerID) && $0.source == .providerAPI }
+        }
+        merged.append(contentsOf: items)
+
+        var bestByKey: [String: ModelCatalogItem] = [:]
+        for item in merged where item.modelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            let key = [item.providerID, item.modelID.lowercased()].joined(separator: "|")
+            if let existing = bestByKey[key] {
+                if sourceRank(item.source) < sourceRank(existing.source) {
+                    bestByKey[key] = item
+                }
+            } else {
+                bestByKey[key] = item
+            }
+        }
+        modelCatalogItems = bestByKey.values.sorted {
+            if $0.providerID != $1.providerID {
+                return $0.providerID < $1.providerID
+            }
+            if $0.source != $1.source {
+                return sourceRank($0.source) < sourceRank($1.source)
+            }
+            return $0.modelID.localizedStandardCompare($1.modelID) == .orderedAscending
+        }
+    }
+
+    private func mergeModelUsageRollups(_ localRows: [ModelUsageRollup]) {
+        let configuredRows = agentModelConfigurationService.readConfiguredModels()
+        let localKeys = Set(localRows.map { modelUsageMergeKey($0) })
+        let visibleConfiguredRows = configuredRows.filter { localKeys.contains(modelUsageMergeKey($0)) == false }
+        modelUsageRollups = localRows + visibleConfiguredRows
+    }
+
+    private func modelUsageMergeKey(_ rollup: ModelUsageRollup) -> String {
+        [rollup.agent.rawValue, rollup.providerID, rollup.model.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()].joined(separator: "|")
+    }
+
+    private func sourceRank(_ source: ModelCatalogSource) -> Int {
+        switch source {
+        case .providerAPI: 0
+        case .ccSwitchConfig: 1
+        case .localAgentConfig: 2
+        }
+    }
+
+    private func providerAliases(_ providerID: String) -> Set<String> {
+        switch providerID {
+        case "google", "gemini":
+            return ["google", "gemini"]
+        case "ccswitch-codex", "codex":
+            return ["ccswitch-codex", "codex", "openai"]
+        default:
+            return [providerID]
+        }
+    }
+
     private static func claudeStatuslineInput(from data: Data) -> LocalAgentUsageIngest? {
         guard let object = try? JSONSerialization.jsonObject(with: data) else { return nil }
         let model = nestedString(object, path: ["model", "id"])
@@ -1128,7 +1474,7 @@ final class AppState: ObservableObject {
 
         return LocalAgentUsageIngest(
             agent: .claudeCode,
-            providerID: "anthropic",
+            providerID: nil,
             model: model,
             workspaceID: nil,
             workspaceName: nil,

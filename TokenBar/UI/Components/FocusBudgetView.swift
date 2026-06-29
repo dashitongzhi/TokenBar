@@ -16,11 +16,17 @@ struct FocusBudgetView: View {
             }
 
             HStack(alignment: .firstTextBaseline) {
-                Text("$\(appState.formatMoney(appState.sessionSpend))")
-                    .font(compact ? .title3.weight(.semibold) : .title2.weight(.semibold))
-                Text("/ $\(appState.formatMoney(appState.sessionBudget))")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                if appState.sessionBudget > 0 {
+                    Text("$\(appState.formatMoney(appState.sessionSpend))")
+                        .font(compact ? .title3.weight(.semibold) : .title2.weight(.semibold))
+                    Text("/ $\(appState.formatMoney(appState.sessionBudget))")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text(appState.localized("noSessionBudget"))
+                        .font(compact ? .headline : .title3.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
                 Spacer()
                 Button(appState.focusModeEnabled ? appState.localized("stop") : appState.localized("start")) {
                     appState.focusModeEnabled.toggle()
@@ -33,8 +39,10 @@ struct FocusBudgetView: View {
                 .help("Reset")
             }
 
-            ProgressView(value: min(appState.budgetRatio, 1))
-                .tint(appState.budgetStatus.color)
+            if appState.sessionBudget > 0 {
+                ProgressView(value: min(appState.budgetRatio, 1))
+                    .tint(appState.budgetStatus.color)
+            }
         }
         .padding(12)
         .background(Color(nsColor: .controlBackgroundColor))
