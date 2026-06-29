@@ -108,6 +108,10 @@ private struct PolicyDecisionHero: View {
                 .font(.callout.weight(.medium))
                 .fixedSize(horizontal: false, vertical: true)
 
+            if let recommendation = decision.smartRoutingRecommendation {
+                SmartRoutingRecommendationView(recommendation: recommendation)
+            }
+
             HStack {
                 metric(appState.localized("projectedToday"), "$\(appState.formatMoney(decision.projectedDailySpend))")
                 Divider()
@@ -165,6 +169,13 @@ private struct RunConfigurationPanel: View {
                 }
             }
 
+            Picker(appState.localized("routingMode"), selection: $appState.routingMode) {
+                ForEach(RoutingMode.allCases) { mode in
+                    Label(mode.title(language: appState.language), systemImage: mode.symbolName).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+
             Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 12) {
                 GridRow {
                     Picker(appState.localized("agent"), selection: $appState.selectedAgent) {
@@ -220,6 +231,54 @@ private struct RunConfigurationPanel: View {
         .padding(14)
         .background(Color(nsColor: .controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+private struct SmartRoutingRecommendationView: View {
+    @EnvironmentObject private var appState: AppState
+    var recommendation: SmartRoutingRecommendation
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Label(appState.localized("smartRouting"), systemImage: "point.3.connected.trianglepath.dotted")
+                    .font(.caption.weight(.semibold))
+                Spacer()
+                Text("\(Int(recommendation.confidence * 100))%")
+                    .font(.caption.monospacedDigit().weight(.medium))
+                    .foregroundStyle(.secondary)
+            }
+
+            Text("\(recommendation.providerID) / \(recommendation.model)")
+                .font(.callout.monospaced().weight(.semibold))
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            Text(recommendation.reason)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 12) {
+                metric(appState.localized("evidence"), "\(recommendation.evidenceRunCount)")
+                metric(appState.localized("winRate"), "\(Int(recommendation.winRate * 100))%")
+                metric(appState.localized("estimatedRun"), "$\(appState.formatMoney(recommendation.estimatedCost))")
+            }
+        }
+        .padding(10)
+        .background(Color.accentColor.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func metric(_ title: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.caption.monospacedDigit().weight(.medium))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

@@ -70,6 +70,7 @@ It is not another API key switcher. Tools like `cc-switch` are good at routing p
 | CLI preflight | Lets hooks and scripts call `tokenbar check` before launching an agent run. |
 | Local API | Exposes loopback-only policy, quota, pace, and usage endpoints on `127.0.0.1:3847`. |
 | Hook bridge | Connects Codex and Claude Code preflight plus usage ingestion into the same policy engine. |
+| Smart Routing mode | Optional user-selected mode that recommends a provider/model from recorded outcomes while keeping guard policy enforcement first. |
 | Release path | Builds, verifies, signs ad-hoc for local validation, and packages a DMG. |
 
 ## How It Works
@@ -94,6 +95,8 @@ The decision engine evaluates:
 - Company-key requirements
 - Local usage deltas from Claude Code and Codex
 - Live provider state when admin or provider keys are available
+
+Smart Routing is off by default. When the user selects Smart Routing in the app, TokenBar still evaluates the normal guard policy first, then attaches a route recommendation from the local routing ledger, configured models, model catalog, and current provider health. A blocked policy stays blocked even if Smart Routing finds a promising route.
 
 ## Quick Start
 
@@ -184,6 +187,8 @@ printf '{"model":"gpt-5","prompt":"Fix the failing tests and update docs."}' | \
 The CLI first calls the running app's authenticated `POST /policy/evaluate` endpoint. If the app is not running, it searches upward from the current directory for `tokenbar.yml` or `tokenbar.yaml` and evaluates the same workspace policy locally. For Codex preflight, `tokenbar check --codex-hook-json` can read a `UserPromptSubmit` payload from stdin and fill missing cost/tokens from the prompt, model, and Codex pricing table before the policy is evaluated.
 
 That offline path is intentionally narrow and predictable: provider allowlists, blocked model substrings, per-run cost caps, daily budget projection, and company-key requirements mirror the current `PolicyEngine`.
+
+`tokenbar routing record` and `tokenbar routing stats` feed the local Smart Routing ledger. In Guard Only mode those stats are stored and visible through the API but do not change recommendations. In Smart Routing mode, `/policy/evaluate` includes a `smartRouting` object with the recommended provider/model, confidence, evidence count, win rate, and alternatives.
 
 ## Project Policy
 
@@ -486,6 +491,7 @@ TokenBar is a releaseable early product shell with:
 - Working Codex and Claude Code hook examples
 - Claude Code statusline usage ingestion
 - Codex transcript usage ingestion with session de-duplication
+- Optional Smart Routing mode with local outcome-ledger recommendations
 - OpenAI organization usage and cost adapter
 - Anthropic Usage and Cost Admin API adapter
 - OpenRouter Credits API adapter

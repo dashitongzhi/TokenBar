@@ -188,16 +188,32 @@ enum LocalAPIPayloadBuilder {
             "reasons": decision.reasons,
             "recommendation": decision.recommendation,
             "fallbackProvider": decision.fallbackProviderID ?? NSNull(),
+            "routingMode": decision.routingMode.rawValue,
+            "smartRouting": decision.smartRoutingRecommendation.map(smartRoutingRecommendationDictionary) ?? NSNull(),
             "timestamp": ISO8601DateFormatter().string(from: decision.timestamp)
         ]
     }
 
-    private static func smartRoutingRunDictionary(_ record: SmartRoutingRunRecord) -> [String: Any] {
+    private nonisolated static func smartRoutingRecommendationDictionary(_ recommendation: SmartRoutingRecommendation) -> [String: Any] {
+        [
+            "provider": recommendation.providerID,
+            "model": recommendation.model,
+            "taskIntent": recommendation.taskIntent,
+            "confidence": recommendation.confidence,
+            "evidenceRunCount": recommendation.evidenceRunCount,
+            "winRate": recommendation.winRate,
+            "estimatedCost": recommendation.estimatedCost,
+            "reason": recommendation.reason,
+            "alternatives": recommendation.alternatives
+        ]
+    }
+
+    private nonisolated static func smartRoutingRunDictionary(_ record: SmartRoutingRunRecord) -> [String: Any] {
         [
             "id": record.id.uuidString,
             "recordedAt": ISO8601DateFormatter().string(from: record.recordedAt),
             "occurredAt": ISO8601DateFormatter().string(from: record.occurredAt),
-            "agent": record.agent.displayName,
+            "agent": agentDisplayName(record.agent),
             "agentID": record.agent.rawValue,
             "taskIntent": record.taskIntent,
             "provider": record.providerID,
@@ -218,7 +234,7 @@ enum LocalAPIPayloadBuilder {
             "requestCount": record.requestCount ?? NSNull(),
             "signal": record.signal.rawValue,
             "followUpRequired": record.followUpRequired,
-            "win": record.isWin,
+            "win": record.signal == .success && record.followUpRequired == false,
             "selectedBy": record.selectedBy ?? NSNull(),
             "alternatives": record.alternatives,
             "routingReason": record.routingReason ?? NSNull(),
@@ -226,7 +242,7 @@ enum LocalAPIPayloadBuilder {
         ]
     }
 
-    private static func smartRoutingRouteDictionary(_ route: SmartRoutingRouteStats) -> [String: Any] {
+    private nonisolated static func smartRoutingRouteDictionary(_ route: SmartRoutingRouteStats) -> [String: Any] {
         [
             "routeKey": route.routeKey,
             "provider": route.providerID,
@@ -247,6 +263,16 @@ enum LocalAPIPayloadBuilder {
             "averageTokenDelta": route.averageTokenDelta,
             "lastRunAt": ISO8601DateFormatter().string(from: route.lastRunAt)
         ]
+    }
+
+    private nonisolated static func agentDisplayName(_ agent: AgentProvider) -> String {
+        switch agent {
+        case .claudeCode: "Claude Code"
+        case .codex: "Codex"
+        case .cursor: "Cursor"
+        case .continueDev: "Continue"
+        case .custom: "Custom Agent"
+        }
     }
 
     private static func jsonData(_ payload: [String: Any]) -> Data {

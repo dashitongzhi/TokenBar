@@ -104,6 +104,29 @@ enum MainSection: String, CaseIterable, Identifiable, Codable {
     }
 }
 
+enum RoutingMode: String, CaseIterable, Identifiable, Codable {
+    case guardOnly
+    case smartRouting
+
+    var id: String { rawValue }
+
+    func title(language: AppLanguage) -> String {
+        switch (self, language) {
+        case (.guardOnly, .english): "Guard Only"
+        case (.smartRouting, .english): "Smart Routing"
+        case (.guardOnly, .chinese): "仅守卫"
+        case (.smartRouting, .chinese): "智能路由"
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .guardOnly: "shield"
+        case .smartRouting: "point.3.connected.trianglepath.dotted"
+        }
+    }
+}
+
 enum UsageStatus: String, Codable {
     case healthy
     case warning
@@ -888,6 +911,18 @@ struct PolicyEvaluationInput: Codable, Equatable {
     var preferredModel: String? = nil
 }
 
+struct SmartRoutingRecommendation: Codable, Equatable {
+    var providerID: String
+    var model: String
+    var taskIntent: String
+    var confidence: Double
+    var evidenceRunCount: Int
+    var winRate: Double
+    var estimatedCost: Double
+    var reason: String
+    var alternatives: [String]
+}
+
 struct PolicyDecision: Identifiable, Codable, Equatable {
     var id = UUID()
     var timestamp: Date
@@ -902,6 +937,8 @@ struct PolicyDecision: Identifiable, Codable, Equatable {
     var reasons: [String]
     var recommendation: String
     var fallbackProviderID: String?
+    var routingMode: RoutingMode = .guardOnly
+    var smartRoutingRecommendation: SmartRoutingRecommendation? = nil
 }
 
 struct UsageSummary: Identifiable, Equatable {
