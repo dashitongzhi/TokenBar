@@ -73,6 +73,8 @@ struct AppPreferencesStore {
     }
 
     private func migrateDemoDefaultsIfNeeded() {
+        guard preferences.object(forKey: "removedDemoSeedDefaultsV1") == nil else { return }
+
         let demoWorkspaceIDs = ["client-app", "personal-lab", "production-fix"]
         let hadDemoWorkspace = demoWorkspaceIDs.contains(preferences.string(forKey: "selectedWorkspaceID") ?? "")
         let hadDemoModel = preferences.string(forKey: "selectedModel") == "claude-opus"
@@ -112,9 +114,7 @@ struct AppPreferencesStore {
             changed = true
         }
         preferences.set(true, forKey: "removedDemoSeedDefaultsV1")
-        if changed {
-            preferences.synchronize()
-        }
+        preferences.synchronize()
     }
 
     private func number(forKey key: String) -> Double? {

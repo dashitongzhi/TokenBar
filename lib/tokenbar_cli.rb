@@ -1178,6 +1178,17 @@ module TokenBarCLI
     input
   end
 
+  def attach_routing_config!(input, config)
+    return input unless config
+
+    workspace = offline_workspace(config, input["workspaceID"] || config.dig("workspace", "id"))
+    input["workspaceID"] ||= workspace["id"]
+    input["workspaceName"] ||= workspace["name"]
+    input["workspacePath"] ||= workspace["pathHint"]
+    input["providerID"] ||= config.dig("providers", "preferred") || workspace["allowedProviderIDs"].first
+    input
+  end
+
   def validate_usage_input!(input)
     valid_agents = AGENT_DISPLAY.keys
     raise Error, "--agent must be one of #{valid_agents.join(", ")}" unless valid_agents.include?(input["agent"])
@@ -1817,17 +1828,17 @@ module TokenBarCLI
     status = run["win"] ? "WIN" : run["signal"].to_s.upcase
     puts "Recorded routing run: #{status}"
     puts "Route: #{run["provider"]}/#{run["model"]} for #{run["taskIntent"]}"
-    puts "Cost: estimated $#{format_money(run["estimatedCost"].to_f)} → actual $#{format_money(run["actualCost"].to_f)}"
-    puts "Tokens: estimated #{run["estimatedTokens"].to_i} → actual #{run["actualTokens"].to_i}"
+    puts "Cost: estimated $#{format_money(run["estimatedCost"].to_f)} -> actual $#{format_money(run["actualCost"].to_f)}"
+    puts "Tokens: estimated #{run["estimatedTokens"].to_i} -> actual #{run["actualTokens"].to_i}"
     puts "Workspace: #{run["workspaceName"] || run["workspaceID"] || "current app workspace"}"
   end
 
   def print_routing_stats(response)
     stats = response.fetch("stats")
     puts "Smart routing stats"
-    puts "Runs: #{stats["totalRuns"]} · Win rate: #{percent(stats["winRate"])} · Follow-up rate: #{percent(stats["followUpRate"])}"
-    puts "Cost: estimated $#{format_money(stats["estimatedCostTotal"].to_f)} → actual $#{format_money(stats["actualCostTotal"].to_f)}"
-    puts "Tokens: estimated #{stats["estimatedTokensTotal"].to_i} → actual #{stats["actualTokensTotal"].to_i}"
+    puts "Runs: #{stats["totalRuns"]} | Win rate: #{percent(stats["winRate"])} | Follow-up rate: #{percent(stats["followUpRate"])}"
+    puts "Cost: estimated $#{format_money(stats["estimatedCostTotal"].to_f)} -> actual $#{format_money(stats["actualCostTotal"].to_f)}"
+    puts "Tokens: estimated #{stats["estimatedTokensTotal"].to_i} -> actual #{stats["actualTokensTotal"].to_i}"
 
     routes = Array(response["routes"]).first(5)
     return if routes.empty?
@@ -1835,7 +1846,7 @@ module TokenBarCLI
     puts
     puts "Top routes:"
     routes.each do |route|
-      puts "- #{route["provider"]}/#{route["model"]} · #{route["taskIntent"]}: #{route["runCount"]} runs, #{percent(route["winRate"])} wins, #{percent(route["followUpRate"])} follow-up"
+      puts "- #{route["provider"]}/#{route["model"]} | #{route["taskIntent"]}: #{route["runCount"]} runs, #{percent(route["winRate"])} wins, #{percent(route["followUpRate"])} follow-up"
     end
   end
 

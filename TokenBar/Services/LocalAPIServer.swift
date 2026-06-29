@@ -70,8 +70,9 @@ final class LocalAPIServer {
         do {
             _ = tokenStore.token()
             let parameters = NWParameters.tcp
-            parameters.requiredInterfaceType = .loopback
-            let listener = try NWListener(using: parameters, on: endpointPort)
+            parameters.allowLocalEndpointReuse = true
+            parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(IPv4Address("127.0.0.1")!), port: endpointPort)
+            let listener = try NWListener(using: parameters)
             listener.stateUpdateHandler = { [weak self, weak listener] state in
                 guard let self, let listener else { return }
                 Task { @MainActor [self, listener] in
