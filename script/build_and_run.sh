@@ -39,6 +39,9 @@ fail() {
 
 app_pids() {
   pgrep -x "$APP_NAME" 2>/dev/null || true
+  if [[ -n "$VERIFY_APP_PID" ]] && kill -0 "$VERIFY_APP_PID" >/dev/null 2>&1; then
+    printf "%s\n" "$VERIFY_APP_PID"
+  fi
 }
 
 latest_app_pid() {
@@ -55,7 +58,12 @@ wait_for_app_exit() {
 
 process_state() {
   local pid="$1"
-  ps -o stat= -p "$pid" 2>/dev/null | tr -d "[:space:]"
+  local stat
+  stat="$(ps -o stat= -p "$pid" 2>/dev/null | tr -d "[:space:]")"
+  if [[ -z "$stat" ]] && kill -0 "$pid" >/dev/null 2>&1; then
+    stat="alive"
+  fi
+  printf "%s\n" "$stat"
 }
 
 process_is_stopped() {
