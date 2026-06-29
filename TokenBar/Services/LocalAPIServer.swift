@@ -12,6 +12,15 @@ final class LocalAPIServer {
     private let queue = DispatchQueue(label: "TokenBar.LocalAPIServer")
     private let logger = Logger(subsystem: "Kral.TokenBar", category: "LocalAPIServer")
 
+    private nonisolated static var isVerifyMode: Bool {
+        CommandLine.arguments.contains("--tokenbar-verify-local-api")
+    }
+
+    private nonisolated static func verifyLog(_ message: String) {
+        guard isVerifyMode else { return }
+        FileHandle.standardError.write(Data("TokenBar verify mode: \(message)\n".utf8))
+    }
+
     private struct HTTPRequest {
         var method: String
         var path: String
@@ -68,12 +77,16 @@ final class LocalAPIServer {
         }
         appState.setLocalAPIStatus(.starting(port: port))
         do {
+            Self.verifyLog("local API start requested on port \(port)")
             _ = tokenStore.token()
+            Self.verifyLog("local API token ready")
             let parameters = NWParameters.tcp
             parameters.allowLocalEndpointReuse = true
             parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(IPv4Address("127.0.0.1")!), port: endpointPort)
             let listener = try NWListener(using: parameters)
+            Self.verifyLog("local API listener created")
             listener.stateUpdateHandler = { [weak self, weak listener] state in
+                Self.verifyLog("local API listener state \(state)")
                 guard let self, let listener else { return }
                 Task { @MainActor [self, listener] in
                     self.handle(state: state, port: port, listener: listener)
@@ -83,10 +96,12 @@ final class LocalAPIServer {
                 self?.handle(connection)
             }
             listener.start(queue: queue)
+            Self.verifyLog("local API listener start submitted")
             self.listener = listener
         } catch {
             appState.setLocalAPIStatus(.failed(error.localizedDescription))
             print("TokenBar Local API failed to start: \(error)")
+            Self.verifyLog("local API failed to start: \(error)")
         }
     }
 

@@ -27,6 +27,8 @@ struct PolicyEngine {
             )
         let provider = providers.first { $0.id == input.providerID }
         let projectedDailySpend = workspace.spendToday + input.estimatedCost
+        let modelIsUnspecified = input.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || input.model == "unspecified"
         var status: PolicyDecisionStatus = .allow
         var reasons: [String] = []
 
@@ -68,6 +70,11 @@ struct PolicyEngine {
             reasons.append("Current session budget will be tight after this run.")
         }
 
+        if modelIsUnspecified && status != .block {
+            status = .warn
+            reasons.append("No model has been selected yet.")
+        }
+
         if reasons.isEmpty {
             reasons.append("Workspace, provider, model, and budget are inside policy.")
         }
@@ -78,7 +85,11 @@ struct PolicyEngine {
         case .allow:
             recommendation = "Continue with \(input.model). Keep the agent on this workspace policy."
         case .warn:
-            recommendation = "Continue only if this run is necessary, or switch to \(fallbackName(fallback, providers: providers)) first."
+            if modelIsUnspecified {
+                recommendation = "Select a configured model before running an agent."
+            } else {
+                recommendation = "Continue only if this run is necessary, or switch to \(fallbackName(fallback, providers: providers)) first."
+            }
         case .block:
             recommendation = "Stop this run. Switch provider/model or raise the workspace budget after review."
         }

@@ -195,14 +195,14 @@ private struct RunConfigurationPanel: View {
                         Text(appState.localized("estimatedRun"))
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        Slider(value: $appState.estimatedRunCost, in: 0.05...5, step: 0.05)
+                        Slider(value: $appState.estimatedRunCost, in: 0...5, step: 0.05)
                     }
 
                     VStack(alignment: .leading) {
                         Text(appState.localized("estimatedTokens"))
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        Slider(value: $appState.estimatedTokens, in: 1_000...500_000, step: 1_000)
+                        Slider(value: $appState.estimatedTokens, in: 0...500_000, step: 1_000)
                     }
                 }
             }

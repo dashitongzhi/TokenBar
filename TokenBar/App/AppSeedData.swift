@@ -108,8 +108,8 @@ enum AppSeedData {
         let inferred = inference ?? WorkspacePolicyInference(
             allowedProviderIDs: ["openai", "anthropic", "openrouter"],
             preferredProviderID: "openai",
-            preferredModel: "gpt-5",
-            maxEstimatedRunCost: 1.50,
+            preferredModel: "unspecified",
+            maxEstimatedRunCost: 0,
             setupSourceDetail: "Default local policy. No Codex, Claude, or CC Switch model configuration was found yet.",
             configuredModelCount: 0,
             inferredFromPaths: []

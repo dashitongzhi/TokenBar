@@ -63,7 +63,10 @@ struct AgentModelConfigurationService {
         let fallbackProviderIDs = ["openai", "anthropic", "openrouter"]
         let allowedProviderIDs = providerIDs.isEmpty ? fallbackProviderIDs : providerIDs
         let preferredProviderID = preferred?.providerID ?? allowedProviderIDs.first ?? "openai"
-        let preferredModel = preferred?.model ?? defaultModel(providerID: preferredProviderID)
+        let preferredModel = preferred?.model ?? "unspecified"
+        let maxEstimatedRunCost = preferred.map { _ in
+            defaultPerRunCap(providerID: preferredProviderID, model: preferredModel)
+        } ?? 0
         let paths = orderedUnique(
             usableSignals.compactMap(\.sourcePath).filter { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false }
         )
@@ -80,7 +83,7 @@ struct AgentModelConfigurationService {
             allowedProviderIDs: allowedProviderIDs,
             preferredProviderID: preferredProviderID,
             preferredModel: preferredModel,
-            maxEstimatedRunCost: defaultPerRunCap(providerID: preferredProviderID, model: preferredModel),
+            maxEstimatedRunCost: maxEstimatedRunCost,
             setupSourceDetail: sourceDetail,
             configuredModelCount: usableSignals.count,
             inferredFromPaths: paths.isEmpty ? [fallbackPath] : paths
