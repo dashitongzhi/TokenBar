@@ -81,6 +81,8 @@ struct AppPreferencesStore {
 
     private func migrateDemoDefaultsIfNeeded() -> DemoDefaultsMigration {
         var migration = DemoDefaultsMigration()
+        guard preferences.object(forKey: "removedDemoSeedDefaultsV1") == nil else { return migration }
+
         let demoProviderIDs = ["cursor", "github", "stripe"]
         let demoWorkspaceIDs = ["client-app", "personal-lab", "production-fix"]
         let hadDemoProvider = demoProviderIDs.contains(preferences.string(forKey: "selectedProviderID") ?? "")
@@ -130,9 +132,7 @@ struct AppPreferencesStore {
             changed = true
         }
         preferences.set(true, forKey: "removedDemoSeedDefaultsV1")
-        if changed {
-            preferences.synchronize()
-        }
+        preferences.synchronize()
         return migration
     }
 

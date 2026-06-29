@@ -80,7 +80,10 @@ final class LocalAPIServer {
             Self.verifyLog("local API start requested on port \(port)")
             _ = tokenStore.token()
             Self.verifyLog("local API token ready")
-            let listener = try NWListener(using: .tcp, on: endpointPort)
+            let parameters = NWParameters.tcp
+            parameters.allowLocalEndpointReuse = true
+            parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(IPv4Address("127.0.0.1")!), port: endpointPort)
+            let listener = try NWListener(using: parameters)
             Self.verifyLog("local API listener created")
             listener.stateUpdateHandler = { [weak self, weak listener] state in
                 Self.verifyLog("local API listener state \(state)")
