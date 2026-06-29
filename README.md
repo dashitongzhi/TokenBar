@@ -162,6 +162,19 @@ TokenBar includes a dependency-free local CLI at `bin/tokenbar`.
 ./bin/tokenbar usage codex-session \
   --transcript ~/.codex/sessions/2026/06/17/rollout-example.jsonl
 
+./bin/tokenbar routing record \
+  --agent codex \
+  --intent implementation \
+  --provider openai \
+  --model gpt-5 \
+  --estimated-cost 0.40 \
+  --actual-cost 0.33 \
+  --estimated-tokens 42000 \
+  --actual-tokens 38000 \
+  --success
+
+./bin/tokenbar routing stats
+
 printf '{"model":"gpt-5","prompt":"Fix the failing tests and update docs."}' | \
   ./bin/tokenbar check --agent codex --provider openai --codex-hook-json --json
 
@@ -434,6 +447,8 @@ Run CLI smoke checks:
 ```bash
 ./bin/tokenbar status
 ./bin/tokenbar usage ingest --agent claudeCode --provider anthropic --model claude-sonnet --session-id smoke --cost-usd 0.12 --total-tokens 24000 --json
+./bin/tokenbar routing record --agent codex --intent smoke --provider openai --model gpt-5 --estimated-cost 0.10 --actual-cost 0.08 --estimated-tokens 12000 --actual-tokens 9500 --success --json
+./bin/tokenbar routing stats --json
 ./bin/tokenbar usage codex-session --transcript /path/to/codex-rollout.jsonl --json
 printf '{"model":"gpt-5","prompt":"Implement the CLI preflight estimate and verify the hook."}' | ./bin/tokenbar check --agent codex --provider openai --codex-hook-json --intent implement --json
 ./bin/tokenbar check --agent codex --provider anthropic --model claude-sonnet --estimated-cost 0.20 --estimated-tokens 12000 --intent debug

@@ -49,7 +49,7 @@ module TokenBarCLI
     }
 
     global = OptionParser.new do |opts|
-      opts.banner = "Usage: tokenbar [--api-url URL] [--config PATH] <status|check|policy|usage> [options]"
+      opts.banner = "Usage: tokenbar [--api-url URL] [--config PATH] <status|check|policy|usage|routing> [options]"
       opts.on("--api-url URL", "TokenBar local API URL (default: #{DEFAULT_API_URL})") { |value| options[:api_url] = value }
       opts.on("--config PATH", "Use a specific tokenbar.yml instead of upward lookup") { |value| options[:config_path] = value }
       opts.on("--json", "Print machine-readable JSON") { options[:json] = true }
@@ -61,7 +61,7 @@ module TokenBarCLI
     global.order!(argv)
 
     command = argv.shift
-    raise Error, "missing command: use status, check, policy, or usage" unless command
+    raise Error, "missing command: use status, check, policy, usage, or routing" unless command
 
     case command
     when "status"
@@ -72,6 +72,8 @@ module TokenBarCLI
       policy(options, argv)
     when "usage"
       usage(options, argv)
+    when "routing"
+      routing(options, argv)
     else
       raise Error, "unknown command: #{command}"
     end
@@ -459,6 +461,128 @@ module TokenBarCLI
     post_json(api_url, "/usage/ingest", compact_hash(input))
   end
 
+  def routing(options, argv)
+    subcommand = argv.shift
+    raise Error, "missing routing command: use record or stats" unless subcommand
+
+    case subcommand
+    when "record"
+      routing_record(options, argv)
+    when "stats"
+      routing_stats(options, argv)
+    else
+      raise Error, "unknown routing command: #{subcommand}"
+    end
+  end
+
+  def routing_record(options, argv)
+    input = {
+      "agent" => ENV.fetch("TOKENBAR_AGENT", "custom"),
+      "taskIntent" => ENV.fetch("TOKENBAR_INTENT", "unspecified"),
+      "providerID" => ENV["TOKENBAR_PROVIDER"],
+      "model" => ENV["TOKENBAR_MODEL"],
+      "workspaceID" => nil,
+      "workspaceName" => nil,
+      "workspacePath" => Dir.pwd,
+      "sessionID" => ENV["TOKENBAR_SESSION_ID"],
+      "taskID" => ENV["TOKENBAR_TASK_ID"],
+      "estimatedCost" => numeric_env("TOKENBAR_ESTIMATED_COST", 0.0),
+      "actualCost" => numeric_env("TOKENBAR_ACTUAL_COST", numeric_env("TOKENBAR_COST_USD", 0.0)),
+      "estimatedTokens" => integer_env("TOKENBAR_ESTIMATED_TOKENS", 0),
+      "actualTokens" => integer_env("TOKENBAR_ACTUAL_TOKENS", nil),
+      "inputTokens" => integer_env("TOKENBAR_INPUT_TOKENS", nil),
+      "outputTokens" => integer_env("TOKENBAR_OUTPUT_TOKENS", nil),
+      "requestCount" => integer_env("TOKENBAR_REQUEST_COUNT", nil),
+      "signal" => ENV.fetch("TOKENBAR_ROUTING_SIGNAL", "unknown"),
+      "followUpRequired" => nil,
+      "selectedBy" => ENV["TOKENBAR_SELECTED_BY"],
+      "alternatives" => split_list(ENV["TOKENBAR_ALTERNATIVES"].to_s),
+      "routingReason" => ENV["TOKENBAR_ROUTING_REASON"],
+      "metadata" => {}
+    }
+    output_json = options[:json]
+
+    parser = OptionParser.new do |opts|
+      opts.banner = "Usage: tokenbar routing record --intent INTENT --provider PROVIDER --model MODEL [options]"
+      opts.on("--agent AGENT", "claudeCode, codex, cursor, continueDev, or custom") { |value| input["agent"] = value }
+      opts.on("--intent INTENT", "Task intent, such as bugfix, refactor, research, or implementation") { |value| input["taskIntent"] = value }
+      opts.on("--provider PROVIDER", "Selected provider id") { |value| input["providerID"] = value }
+      opts.on("--model MODEL", "Selected model id") { |value| input["model"] = value }
+      opts.on("--workspace-id ID", "Workspace id") { |value| input["workspaceID"] = value }
+      opts.on("--workspace-name NAME", "Workspace display name") { |value| input["workspaceName"] = value }
+      opts.on("--cwd PATH", "Workspace path") { |value| input["workspacePath"] = value }
+      opts.on("--session-id ID", "Agent session id") { |value| input["sessionID"] = value }
+      opts.on("--task-id ID", "Stable task id") { |value| input["taskID"] = value }
+      opts.on("--estimated-cost USD", Float, "Estimated run cost in USD") { |value| input["estimatedCost"] = value }
+      opts.on("--actual-cost USD", Float, "Actual run cost in USD") { |value| input["actualCost"] = value }
+      opts.on("--estimated-tokens TOKENS", Integer, "Estimated token count") { |value| input["estimatedTokens"] = value }
+      opts.on("--actual-tokens TOKENS", Integer, "Actual token count") { |value| input["actualTokens"] = value }
+      opts.on("--input-tokens TOKENS", Integer, "Actual input tokens") { |value| input["inputTokens"] = value }
+      opts.on("--output-tokens TOKENS", Integer, "Actual output tokens") { |value| input["outputTokens"] = value }
+      opts.on("--request-count COUNT", Integer, "Actual request count") { |value| input["requestCount"] = value }
+      opts.on("--success", "Mark the route as successful") { input["signal"] = "success"; input["followUpRequired"] = false }
+      opts.on("--follow-up", "Mark the route as requiring follow-up") { input["signal"] = "followUp"; input["followUpRequired"] = true }
+      opts.on("--failed", "Mark the route as failed") { input["signal"] = "failed"; input["followUpRequired"] = true }
+      opts.on("--signal SIGNAL", "success, followUp, failed, or unknown") { |value| input["signal"] = value }
+      opts.on("--selected-by NAME", "Router or policy that selected the provider/model") { |value| input["selectedBy"] = value }
+      opts.on("--alternatives LIST", "Comma-separated provider/model alternatives considered") { |value| input["alternatives"] = split_list(value) }
+      opts.on("--routing-reason TEXT", "Short explanation for the route") { |value| input["routingReason"] = value }
+      opts.on("--metadata KEY=VALUE", "Attach metadata; may be repeated") { |value| add_metadata!(input["metadata"], value) }
+      opts.on("--json", "Print machine-readable JSON") { output_json = true }
+      opts.on("-h", "--help", "Show help") do
+        puts opts
+        exit 0
+      end
+    end
+    parser.parse!(argv)
+
+    config = load_config(options[:config_path])
+    input["providerID"] ||= provider_from_model_or_agent(input["model"], input["agent"])
+    input["model"] ||= default_model(input["providerID"])
+    input["actualTokens"] ||= input["inputTokens"].to_i + input["outputTokens"].to_i if input["inputTokens"] || input["outputTokens"]
+    attach_routing_config!(input, config)
+    validate_routing_input!(input)
+
+    response = post_smart_routing_run(options[:api_url], input)
+    raise Error, api_failure_message("smart routing run recording requires the app API") unless response
+
+    if output_json
+      puts JSON.pretty_generate(response)
+    else
+      print_routing_record(response)
+    end
+  end
+
+  def routing_stats(options, argv)
+    output_json = options[:json]
+    parser = OptionParser.new do |opts|
+      opts.banner = "Usage: tokenbar routing stats [--json]"
+      opts.on("--json", "Print machine-readable JSON") { output_json = true }
+      opts.on("-h", "--help", "Show help") do
+        puts opts
+        exit 0
+      end
+    end
+    parser.parse!(argv)
+
+    response = fetch_smart_routing_stats(options[:api_url])
+    raise Error, api_failure_message("smart routing stats require the app API") unless response
+
+    if output_json
+      puts JSON.pretty_generate(response)
+    else
+      print_routing_stats(response)
+    end
+  end
+
+  def post_smart_routing_run(api_url, input)
+    post_json(api_url, "/routing/runs", compact_hash(input))
+  end
+
+  def fetch_smart_routing_stats(api_url)
+    http_get(api_url, "/routing/stats")
+  end
+
   def post_json(api_url, path, input)
     uri = endpoint(api_url, path)
     if curl_available?
@@ -599,6 +723,13 @@ module TokenBarCLI
     raise Error, "--hooks must be codex, claude, all, or none" unless invalid.empty?
 
     hooks
+  end
+
+  def add_metadata!(metadata, value)
+    key, separator, raw = value.to_s.partition("=")
+    raise Error, "--metadata must use KEY=VALUE" if separator.empty? || key.strip.empty?
+
+    metadata[key.strip] = raw.strip
   end
 
   def slug(value)
@@ -807,6 +938,17 @@ module TokenBarCLI
     input
   end
 
+  def attach_routing_config!(input, config)
+    return input unless config
+
+    workspace = offline_workspace(config, input["workspaceID"] || config.dig("workspace", "id"))
+    input["workspaceID"] ||= workspace["id"]
+    input["workspaceName"] ||= workspace["name"]
+    input["workspacePath"] ||= workspace["pathHint"]
+    input["providerID"] ||= config.dig("providers", "preferred") || workspace["allowedProviderIDs"].first
+    input
+  end
+
   def validate_usage_input!(input)
     valid_agents = AGENT_DISPLAY.keys
     raise Error, "--agent must be one of #{valid_agents.join(", ")}" unless valid_agents.include?(input["agent"])
@@ -814,6 +956,33 @@ module TokenBarCLI
     raise Error, "missing model: pass --model or set TOKENBAR_MODEL" if blank?(input["model"])
     raise Error, "--cost-usd must be >= 0" if input["costUSD"].to_f.negative?
     raise Error, "token counts must be >= 0" if %w[inputTokens outputTokens totalTokens requestCount].any? { |key| !input[key].nil? && input[key].to_i.negative? }
+  end
+
+  def validate_routing_input!(input)
+    valid_agents = AGENT_DISPLAY.keys
+    valid_signals = %w[success followUp failed unknown]
+    input["signal"] = normalize_routing_signal(input["signal"])
+
+    raise Error, "--agent must be one of #{valid_agents.join(", ")}" unless valid_agents.include?(input["agent"])
+    raise Error, "missing provider: pass --provider or set providers.preferred in tokenbar.yml" if blank?(input["providerID"])
+    raise Error, "missing model: pass --model or set TOKENBAR_MODEL" if blank?(input["model"])
+    raise Error, "--signal must be one of #{valid_signals.join(", ")}" unless valid_signals.include?(input["signal"])
+
+    numeric_keys = %w[estimatedCost actualCost estimatedTokens actualTokens inputTokens outputTokens requestCount]
+    raise Error, "routing cost and token counts must be >= 0" if numeric_keys.any? { |key| !input[key].nil? && input[key].to_f.negative? }
+  end
+
+  def normalize_routing_signal(value)
+    case value.to_s.strip.downcase.tr("_-", "")
+    when "success", "succeeded", "win"
+      "success"
+    when "followup", "needsfollowup", "needsrepair"
+      "followUp"
+    when "failed", "failure", "fail"
+      "failed"
+    else
+      "unknown"
+    end
   end
 
   def provider_from_model_or_agent(model, agent)
@@ -1392,6 +1561,33 @@ module TokenBarCLI
     puts pieces.join(" · ")
   end
 
+  def print_routing_record(response)
+    run = response.fetch("routingRun")
+    status = run["win"] ? "WIN" : run["signal"].to_s.upcase
+    puts "Recorded routing run: #{status}"
+    puts "Route: #{run["provider"]}/#{run["model"]} for #{run["taskIntent"]}"
+    puts "Cost: estimated $#{format_money(run["estimatedCost"].to_f)} -> actual $#{format_money(run["actualCost"].to_f)}"
+    puts "Tokens: estimated #{run["estimatedTokens"].to_i} -> actual #{run["actualTokens"].to_i}"
+    puts "Workspace: #{run["workspaceName"] || run["workspaceID"] || "current app workspace"}"
+  end
+
+  def print_routing_stats(response)
+    stats = response.fetch("stats")
+    puts "Smart routing stats"
+    puts "Runs: #{stats["totalRuns"]} | Win rate: #{percent(stats["winRate"])} | Follow-up rate: #{percent(stats["followUpRate"])}"
+    puts "Cost: estimated $#{format_money(stats["estimatedCostTotal"].to_f)} -> actual $#{format_money(stats["actualCostTotal"].to_f)}"
+    puts "Tokens: estimated #{stats["estimatedTokensTotal"].to_i} -> actual #{stats["actualTokensTotal"].to_i}"
+
+    routes = Array(response["routes"]).first(5)
+    return if routes.empty?
+
+    puts
+    puts "Top routes:"
+    routes.each do |route|
+      puts "- #{route["provider"]}/#{route["model"]} | #{route["taskIntent"]}: #{route["runCount"]} runs, #{percent(route["winRate"])} wins, #{percent(route["followUpRate"])} follow-up"
+    end
+  end
+
   def print_policy_init(payload)
     puts "Created TokenBar policy:"
     puts "- #{payload["policy"]}"
@@ -1412,6 +1608,10 @@ module TokenBarCLI
 
   def format_money(value)
     format("%.2f", value)
+  end
+
+  def percent(value)
+    "#{(value.to_f * 100).round}%"
   end
 
   def numeric_env(name, fallback)

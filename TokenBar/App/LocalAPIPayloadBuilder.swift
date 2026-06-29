@@ -61,6 +61,40 @@ enum LocalAPIPayloadBuilder {
         return jsonData(payload)
     }
 
+    static func smartRoutingRunJSON(record: SmartRoutingRunRecord) -> Data {
+        let payload: [String: Any] = [
+            "version": "1.0",
+            "timestamp": ISO8601DateFormatter().string(from: Date()),
+            "localOnly": true,
+            "routingRun": smartRoutingRunDictionary(record)
+        ]
+        return jsonData(payload)
+    }
+
+    static func smartRoutingStatsJSON(snapshot: SmartRoutingStatsSnapshot) -> Data {
+        let payload: [String: Any] = [
+            "version": "1.0",
+            "timestamp": ISO8601DateFormatter().string(from: snapshot.generatedAt),
+            "localOnly": true,
+            "stats": [
+                "totalRuns": snapshot.totalRuns,
+                "winCount": snapshot.winCount,
+                "followUpCount": snapshot.followUpCount,
+                "failedCount": snapshot.failedCount,
+                "unknownCount": snapshot.unknownCount,
+                "winRate": snapshot.winRate,
+                "followUpRate": snapshot.followUpRate,
+                "estimatedCostTotal": snapshot.estimatedCostTotal,
+                "actualCostTotal": snapshot.actualCostTotal,
+                "estimatedTokensTotal": snapshot.estimatedTokensTotal,
+                "actualTokensTotal": snapshot.actualTokensTotal
+            ],
+            "routes": snapshot.routeStats.map(smartRoutingRouteDictionary),
+            "recentRuns": snapshot.recentRuns.map(smartRoutingRunDictionary)
+        ]
+        return jsonData(payload)
+    }
+
     static func mcpSnapshotJSON(providers: [ProviderUsage], filteredProviderID: String? = nil) -> Data {
         let selected = filteredProviderID.map { id in providers.filter { $0.id == id } } ?? providers
         let quotas = selected.map { provider in
@@ -148,6 +182,63 @@ enum LocalAPIPayloadBuilder {
             "recommendation": decision.recommendation,
             "fallbackProvider": decision.fallbackProviderID ?? NSNull(),
             "timestamp": ISO8601DateFormatter().string(from: decision.timestamp)
+        ]
+    }
+
+    private static func smartRoutingRunDictionary(_ record: SmartRoutingRunRecord) -> [String: Any] {
+        [
+            "id": record.id.uuidString,
+            "recordedAt": ISO8601DateFormatter().string(from: record.recordedAt),
+            "occurredAt": ISO8601DateFormatter().string(from: record.occurredAt),
+            "agent": record.agent.displayName,
+            "agentID": record.agent.rawValue,
+            "taskIntent": record.taskIntent,
+            "provider": record.providerID,
+            "model": record.model,
+            "workspaceID": record.workspaceID ?? NSNull(),
+            "workspaceName": record.workspaceName ?? NSNull(),
+            "workspacePath": record.workspacePath ?? NSNull(),
+            "sessionID": record.sessionID ?? NSNull(),
+            "taskID": record.taskID ?? NSNull(),
+            "estimatedCost": record.estimatedCost,
+            "actualCost": record.actualCost,
+            "costDelta": record.actualCost - record.estimatedCost,
+            "estimatedTokens": record.estimatedTokens,
+            "actualTokens": record.actualTokens,
+            "tokenDelta": record.actualTokens - record.estimatedTokens,
+            "inputTokens": record.inputTokens ?? NSNull(),
+            "outputTokens": record.outputTokens ?? NSNull(),
+            "requestCount": record.requestCount ?? NSNull(),
+            "signal": record.signal.rawValue,
+            "followUpRequired": record.followUpRequired,
+            "win": record.isWin,
+            "selectedBy": record.selectedBy ?? NSNull(),
+            "alternatives": record.alternatives,
+            "routingReason": record.routingReason ?? NSNull(),
+            "metadata": record.metadata
+        ]
+    }
+
+    private static func smartRoutingRouteDictionary(_ route: SmartRoutingRouteStats) -> [String: Any] {
+        [
+            "routeKey": route.routeKey,
+            "provider": route.providerID,
+            "model": route.model,
+            "taskIntent": route.taskIntent,
+            "runCount": route.runCount,
+            "winCount": route.winCount,
+            "followUpCount": route.followUpCount,
+            "failedCount": route.failedCount,
+            "unknownCount": route.unknownCount,
+            "winRate": route.winRate,
+            "followUpRate": route.followUpRate,
+            "estimatedCostTotal": route.estimatedCostTotal,
+            "actualCostTotal": route.actualCostTotal,
+            "estimatedTokensTotal": route.estimatedTokensTotal,
+            "actualTokensTotal": route.actualTokensTotal,
+            "averageCostDelta": route.averageCostDelta,
+            "averageTokenDelta": route.averageTokenDelta,
+            "lastRunAt": ISO8601DateFormatter().string(from: route.lastRunAt)
         ]
     }
 
