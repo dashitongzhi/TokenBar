@@ -417,7 +417,7 @@ struct ProviderUsage: Identifiable, Codable, Equatable {
             history = [UsagePoint(timestamp: snapshot.fetchedAt, value: quotaWindow.intervalUsedPercent)]
         } else {
             current = snapshot.tokenTotalMonth
-            limit = snapshot.monthlySpendLimit ?? 0
+            limit = 0
             unit = "tokens"
             quotaLimitKnown = false
             resetAt = snapshot.monthResetAt

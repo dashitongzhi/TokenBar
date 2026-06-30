@@ -404,7 +404,6 @@ struct CCSwitchUsageService {
         if haystack.contains("glm") { return .glm }
         if haystack.contains("openai") || haystack.contains("gpt") || haystack.contains("o1") || haystack.contains("o3") || haystack.contains("o4") { return .openAI }
         if haystack.contains("anthropic") || haystack.contains("claude") { return .anthropic }
-        if rollup.appType == "codex" { return .openAI }
         return nil
     }
 
@@ -423,7 +422,6 @@ struct CCSwitchUsageService {
         if haystack.contains("glm") { return .glm }
         if haystack.contains("openai") || haystack.contains("gpt") || haystack.contains("o1") || haystack.contains("o3") || haystack.contains("o4") { return .openAI }
         if haystack.contains("anthropic") || haystack.contains("claude") { return .anthropic }
-        if record.appType == "codex" { return .openAI }
         return nil
     }
 
