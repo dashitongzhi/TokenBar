@@ -453,6 +453,16 @@ The verifier runs TokenBar's built-in `--tokenbar-verify-local-api` path without
 
 `--verify` is a local API acceptance check, not a visual UI smoke test. Use the default `./script/build_and_run.sh` path when you need to launch the signed macOS app through LaunchServices.
 
+Verify the first-run demo defaults upgrade path:
+
+```bash
+mkdir -p .build/verification
+swiftc TokenBar/App/AppPreferencesStore.swift script/verify_app_preferences_migration.swift -o .build/verification/verify_app_preferences_migration
+./.build/verification/verify_app_preferences_migration
+```
+
+This creates a temporary `UserDefaults` suite that simulates an older install with `removedDemoSeedDefaultsV1=true` and lingering demo `selectedProviderID`, `selectedWorkspaceID`, `selectedModel`, cost, and session budget values. The success message confirms the V2 cleanup is not short-circuited by the legacy V1 marker and remains stable on a second load.
+
 Run CLI smoke checks:
 
 ```bash

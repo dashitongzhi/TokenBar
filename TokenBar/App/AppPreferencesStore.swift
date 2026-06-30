@@ -25,6 +25,13 @@ struct AppPreferencesSnapshot {
 
 struct AppPreferencesStore {
     private let preferences: UserDefaults
+    private enum DemoDefaultsCleanup {
+        static let legacyV1Key = "removedDemoSeedDefaultsV1"
+        static let versionKey = "demoSeedDefaultsCleanupVersion"
+        static let latestVersion = 2
+        static let demoProviderIDs = ["cursor", "github", "stripe"]
+        static let demoWorkspaceIDs = ["client-app", "personal-lab", "production-fix"]
+    }
 
     private struct DemoDefaultsMigration {
         var resetSelectedProvider = false
@@ -84,57 +91,51 @@ struct AppPreferencesStore {
 
     private func migrateDemoDefaultsIfNeeded() -> DemoDefaultsMigration {
         var migration = DemoDefaultsMigration()
-        guard preferences.object(forKey: "removedDemoSeedDefaultsV1") == nil else { return migration }
+        let completedVersion = preferences.integer(forKey: DemoDefaultsCleanup.versionKey)
+        let needsLegacyV1Marker = preferences.object(forKey: DemoDefaultsCleanup.legacyV1Key) == nil
+        let needsV2Cleanup = completedVersion < DemoDefaultsCleanup.latestVersion
+        guard needsLegacyV1Marker || needsV2Cleanup else { return migration }
 
-        let demoProviderIDs = ["cursor", "github", "stripe"]
-        let demoWorkspaceIDs = ["client-app", "personal-lab", "production-fix"]
-        let hadDemoProvider = demoProviderIDs.contains(preferences.string(forKey: "selectedProviderID") ?? "")
-        let hadDemoWorkspace = demoWorkspaceIDs.contains(preferences.string(forKey: "selectedWorkspaceID") ?? "")
+        let hadDemoProvider = DemoDefaultsCleanup.demoProviderIDs.contains(preferences.string(forKey: "selectedProviderID") ?? "")
+        let hadDemoWorkspace = DemoDefaultsCleanup.demoWorkspaceIDs.contains(preferences.string(forKey: "selectedWorkspaceID") ?? "")
         let hadDemoModel = preferences.string(forKey: "selectedModel") == "claude-opus"
         let hadDemoCost = number(forKey: "estimatedRunCost") == 1.2
         let hadDemoTokens = number(forKey: "estimatedTokens") == 120_000
         let hadDemoSessionBudget = number(forKey: "sessionBudget") == 5
         let hadDemoSignature = hadDemoProvider || hadDemoWorkspace || hadDemoModel || hadDemoCost || hadDemoTokens || hadDemoSessionBudget
-        var changed = false
 
         if hadDemoProvider {
-            preferences.set("openai", forKey: "selectedProviderID")
+            preferences.removeObject(forKey: "selectedProviderID")
             migration.resetSelectedProvider = true
-            changed = true
         }
         if hadDemoWorkspace {
-            preferences.set("local-workspace", forKey: "selectedWorkspaceID")
+            preferences.removeObject(forKey: "selectedWorkspaceID")
             preferences.set(StatusBarContent.iconOnly.rawValue, forKey: "statusBarContent")
             migration.resetSelectedWorkspace = true
-            changed = true
         }
         if hadDemoModel || hadDemoCost || hadDemoTokens {
-            preferences.set("unspecified", forKey: "selectedModel")
-            preferences.set(AgentProvider.codex.rawValue, forKey: "selectedAgent")
+            preferences.removeObject(forKey: "selectedModel")
+            preferences.removeObject(forKey: "selectedAgent")
             preferences.set(0, forKey: "estimatedRunCost")
             preferences.set(0, forKey: "estimatedTokens")
             migration.resetSelectedAgent = true
             migration.resetSelectedModel = true
-            changed = true
         }
         if hadDemoSessionBudget {
             preferences.set(0, forKey: "sessionBudget")
             preferences.set(0, forKey: "sessionSpend")
-            changed = true
         }
         if number(forKey: "sessionSpend") == 1.2 || hadDemoSignature {
             preferences.set(0, forKey: "sessionSpend")
-            changed = true
         }
         if hadDemoSignature && preferences.object(forKey: "focusModeEnabled") as? Bool == true {
             preferences.set(false, forKey: "focusModeEnabled")
-            changed = true
         }
         if hadDemoSignature && preferences.string(forKey: "statusBarContent") == StatusBarContent.guardDecision.rawValue {
             preferences.set(StatusBarContent.iconOnly.rawValue, forKey: "statusBarContent")
-            changed = true
         }
-        preferences.set(true, forKey: "removedDemoSeedDefaultsV1")
+        preferences.set(true, forKey: DemoDefaultsCleanup.legacyV1Key)
+        preferences.set(DemoDefaultsCleanup.latestVersion, forKey: DemoDefaultsCleanup.versionKey)
         preferences.synchronize()
         return migration
     }
