@@ -453,6 +453,16 @@ verifier 会运行 TokenBar 内置的 `--tokenbar-verify-local-api` 路径，不
 
 `--verify` 是本地 API acceptance check，不是可视化 UI smoke test。需要通过 LaunchServices 启动已签名 macOS app 时，请使用默认的 `./script/build_and_run.sh` 路径。
 
+验证 first-run demo defaults 的本地升级路径：
+
+```bash
+mkdir -p .build/verification
+swiftc TokenBar/App/AppPreferencesStore.swift script/verify_app_preferences_migration.swift -o .build/verification/verify_app_preferences_migration
+./.build/verification/verify_app_preferences_migration
+```
+
+这条路径会创建临时 `UserDefaults` suite，模拟已经带有 `removedDemoSeedDefaultsV1=true` 的旧安装，同时残留 demo `selectedProviderID`、`selectedWorkspaceID`、`selectedModel`、成本和会话预算。成功输出表示 V2 清理没有被旧 V1 标记短路，并且第二次加载保持稳定。
+
 运行 CLI smoke checks：
 
 ```bash
