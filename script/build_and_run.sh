@@ -280,6 +280,8 @@ case "$MODE" in
     enable_local_api_for_verify
     open_verify_app
     verify_app
+    stage "Running local API transient policy smoke"
+    "$ROOT_DIR/script/smoke_policy_evaluate_no_persist.sh"
     ;;
   *)
     echo "usage: $0 [run|--debug|--logs|--telemetry|--verify]" >&2

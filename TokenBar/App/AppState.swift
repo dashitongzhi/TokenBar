@@ -519,10 +519,15 @@ final class AppState: ObservableObject {
         persistProviders()
     }
 
-    func evaluatePolicy(input: PolicyEvaluationInput, shouldRecord: Bool = true) -> PolicyDecision {
+    func evaluatePolicy(
+        input: PolicyEvaluationInput,
+        shouldRecord: Bool = true,
+        workspacePolicies evaluationWorkspacePolicies: [WorkspacePolicy]? = nil
+    ) -> PolicyDecision {
+        let activeWorkspacePolicies = evaluationWorkspacePolicies ?? workspacePolicies
         var decision = PolicyEngine.evaluate(
             input: input,
-            workspaces: workspacePolicies,
+            workspaces: activeWorkspacePolicies,
             selectedWorkspace: selectedWorkspace,
             providers: providers,
             projectedSessionSpend: projectedSessionSpend,
@@ -530,7 +535,7 @@ final class AppState: ObservableObject {
         )
         decision.routingMode = routingMode
         if routingMode == .smartRouting {
-            applySmartRoutingRecommendation(to: &decision, input: input)
+            applySmartRoutingRecommendation(to: &decision, input: input, workspacePolicies: activeWorkspacePolicies)
         }
 
         if shouldRecord {
@@ -544,8 +549,12 @@ final class AppState: ObservableObject {
         return decision
     }
 
-    private func applySmartRoutingRecommendation(to decision: inout PolicyDecision, input: PolicyEvaluationInput) {
-        guard let recommendation = smartRoutingRecommendation(for: input) else {
+    private func applySmartRoutingRecommendation(
+        to decision: inout PolicyDecision,
+        input: PolicyEvaluationInput,
+        workspacePolicies evaluationWorkspacePolicies: [WorkspacePolicy]
+    ) {
+        guard let recommendation = smartRoutingRecommendation(for: input, workspacePolicies: evaluationWorkspacePolicies) else {
             decision.reasons.append("Smart Routing is enabled, but no eligible model route is available yet.")
             return
         }
@@ -565,25 +574,35 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func smartRoutingRecommendation(for input: PolicyEvaluationInput) -> SmartRoutingRecommendation? {
-        let workspace = workspacePolicies.first { $0.id == input.workspaceID } ?? selectedWorkspace
-        let allowedProviderIDs = Set(workspace?.allowedProviderIDs ?? providers.map(\.id))
-        let blockedModels = workspace?.blockedModels ?? []
+    private func smartRoutingRecommendation(
+        for input: PolicyEvaluationInput,
+        workspacePolicies evaluationWorkspacePolicies: [WorkspacePolicy]
+    ) -> SmartRoutingRecommendation? {
+        let workspace = evaluationWorkspacePolicies.first { $0.id == input.workspaceID } ?? selectedWorkspace
         let stats = smartRoutingLedgerStore.stats()
-        let candidates = smartRoutingCandidates(input: input, workspace: workspace, stats: stats)
-            .filter { candidate in
-                allowedProviderIDs.contains(candidate.providerID) &&
-                blockedModels.contains(where: { candidate.model.localizedCaseInsensitiveContains($0) }) == false &&
-                candidate.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false &&
-                candidate.model != "unspecified"
-            }
-
-        let scored = candidates.compactMap { candidate -> (candidate: SmartRoutingCandidate, score: Double, route: SmartRoutingRouteStats?)? in
+        let scored = smartRoutingCandidates(input: input, workspace: workspace, stats: stats).compactMap { candidate -> ScoredSmartRoutingCandidate? in
             let route = bestRouteStats(for: candidate, intent: input.intent, stats: stats.routeStats)
-            if let cap = workspace?.maxEstimatedRunCost, cap > 0, estimatedCost(candidate: candidate, route: route, fallback: input.estimatedCost) > cap {
+            guard let candidateInput = smartRoutingPolicyInput(for: candidate, baseInput: input, route: route, workspace: workspace) else {
                 return nil
             }
-            return (candidate, smartRoutingScore(candidate: candidate, route: route), route)
+
+            let candidateDecision = PolicyEngine.evaluate(
+                input: candidateInput,
+                workspaces: evaluationWorkspacePolicies,
+                selectedWorkspace: selectedWorkspace,
+                providers: providers,
+                projectedSessionSpend: sessionSpend + candidateInput.estimatedCost,
+                sessionBudget: sessionBudget
+            )
+            guard candidateDecision.status != .block else {
+                return nil
+            }
+            return ScoredSmartRoutingCandidate(
+                candidate: candidate,
+                score: smartRoutingScore(candidate: candidate, route: route),
+                route: route,
+                estimatedCost: candidateInput.estimatedCost
+            )
         }
         .sorted {
             if $0.score != $1.score { return $0.score > $1.score }
@@ -595,7 +614,6 @@ final class AppState: ObservableObject {
         let route = best.route
         let runCount = route?.runCount ?? 0
         let winRate = route?.winRate ?? 0
-        let cost = estimatedCost(candidate: best.candidate, route: route, fallback: input.estimatedCost)
         let alternatives = scored.dropFirst().prefix(3).map { "\($0.candidate.providerID)/\($0.candidate.model)" }
         let reason: String
         if let route, route.runCount > 0 {
@@ -613,10 +631,34 @@ final class AppState: ObservableObject {
             confidence: min(max(best.score, 0.1), 0.95),
             evidenceRunCount: runCount,
             winRate: winRate,
-            estimatedCost: cost,
+            estimatedCost: best.estimatedCost,
             reason: reason,
             alternatives: alternatives
         )
+    }
+
+    private func smartRoutingPolicyInput(
+        for candidate: SmartRoutingCandidate,
+        baseInput: PolicyEvaluationInput,
+        route: SmartRoutingRouteStats?,
+        workspace: WorkspacePolicy?
+    ) -> PolicyEvaluationInput? {
+        guard candidate.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
+              candidate.model != "unspecified"
+        else {
+            return nil
+        }
+
+        let estimatedCost = estimatedCost(candidate: candidate, route: route, baseInput: baseInput)
+        if estimatedCost == nil, (workspace?.maxEstimatedRunCost ?? 0) > 0 {
+            return nil
+        }
+
+        var candidateInput = baseInput
+        candidateInput.providerID = candidate.providerID
+        candidateInput.model = candidate.model
+        candidateInput.estimatedCost = estimatedCost ?? 0
+        return candidateInput
     }
 
     private func smartRoutingCandidates(input: PolicyEvaluationInput, workspace: WorkspacePolicy?, stats: SmartRoutingStatsSnapshot) -> [SmartRoutingCandidate] {
@@ -681,14 +723,15 @@ final class AppState: ObservableObject {
         return score
     }
 
-    private func estimatedCost(candidate: SmartRoutingCandidate, route: SmartRoutingRouteStats?, fallback: Double) -> Double {
+    private func estimatedCost(candidate: SmartRoutingCandidate, route: SmartRoutingRouteStats?, baseInput: PolicyEvaluationInput) -> Double? {
         if let route, route.runCount > 0, route.actualCostTotal > 0 {
             return route.actualCostTotal / Double(route.runCount)
         }
-        if candidate.providerID == selectedProviderID && candidate.model == selectedModel {
-            return fallback
+        if candidate.providerID == baseInput.providerID &&
+            candidate.model.caseInsensitiveCompare(baseInput.model) == .orderedSame {
+            return baseInput.estimatedCost
         }
-        return 0
+        return nil
     }
 
     private func providerDisplayName(_ providerID: String) -> String {
@@ -716,8 +759,8 @@ final class AppState: ObservableObject {
     }
 
     func policyDecisionJSON(input: PolicyEvaluationInput) -> Data {
-        upsertWorkspacePolicy(from: input)
-        let decision = evaluatePolicy(input: input)
+        let transientWorkspacePolicies = workspacePoliciesForPolicyEvaluation(input)
+        let decision = evaluatePolicy(input: input, shouldRecord: false, workspacePolicies: transientWorkspacePolicies)
         currentDecision = decision
         return LocalAPIPayloadBuilder.policyDecisionJSON(decision)
     }
@@ -1338,36 +1381,27 @@ final class AppState: ObservableObject {
         return workspaceID
     }
 
-    private func upsertWorkspacePolicy(from input: PolicyEvaluationInput) {
-        guard input.allowedProviderIDs != nil ||
-            input.blockedModels != nil ||
-            input.dailyBudget != nil ||
-            input.monthlyBudget != nil ||
-            input.maxEstimatedRunCost != nil ||
-            input.requireCompanyKey != nil ||
-            input.workspaceName != nil ||
-            input.workspacePath != nil ||
-            input.preferredProviderID != nil ||
-            input.preferredModel != nil
-        else {
-            return
+    private func workspacePoliciesForPolicyEvaluation(_ input: PolicyEvaluationInput) -> [WorkspacePolicy] {
+        guard input.hasTransientWorkspacePolicyFields else {
+            return workspacePolicies
         }
 
+        var evaluationWorkspacePolicies = workspacePolicies
         if let index = workspacePolicies.firstIndex(where: { $0.id == input.workspaceID }) {
-            workspacePolicies[index].name = input.workspaceName ?? workspacePolicies[index].name
-            workspacePolicies[index].pathHint = input.workspacePath ?? workspacePolicies[index].pathHint
-            workspacePolicies[index].client = input.workspaceClient ?? workspacePolicies[index].client
-            workspacePolicies[index].dailyBudget = input.dailyBudget ?? workspacePolicies[index].dailyBudget
-            workspacePolicies[index].monthlyBudget = input.monthlyBudget ?? workspacePolicies[index].monthlyBudget
-            workspacePolicies[index].maxEstimatedRunCost = input.maxEstimatedRunCost ?? workspacePolicies[index].maxEstimatedRunCost
-            workspacePolicies[index].allowedProviderIDs = input.allowedProviderIDs ?? workspacePolicies[index].allowedProviderIDs
-            workspacePolicies[index].blockedModels = input.blockedModels ?? workspacePolicies[index].blockedModels
-            workspacePolicies[index].requireCompanyKey = input.requireCompanyKey ?? workspacePolicies[index].requireCompanyKey
-            workspacePolicies[index].preferredProviderID = input.preferredProviderID ?? input.providerID
-            workspacePolicies[index].preferredModel = input.preferredModel ?? input.model
-            workspacePolicies[index].setupSourceDetail = workspacePolicies[index].setupSourceDetail ?? "Updated from tokenbar.yml via local policy check."
+            evaluationWorkspacePolicies[index].name = input.workspaceName ?? evaluationWorkspacePolicies[index].name
+            evaluationWorkspacePolicies[index].pathHint = input.workspacePath ?? evaluationWorkspacePolicies[index].pathHint
+            evaluationWorkspacePolicies[index].client = input.workspaceClient ?? evaluationWorkspacePolicies[index].client
+            evaluationWorkspacePolicies[index].dailyBudget = input.dailyBudget ?? evaluationWorkspacePolicies[index].dailyBudget
+            evaluationWorkspacePolicies[index].monthlyBudget = input.monthlyBudget ?? evaluationWorkspacePolicies[index].monthlyBudget
+            evaluationWorkspacePolicies[index].maxEstimatedRunCost = input.maxEstimatedRunCost ?? evaluationWorkspacePolicies[index].maxEstimatedRunCost
+            evaluationWorkspacePolicies[index].allowedProviderIDs = input.allowedProviderIDs ?? evaluationWorkspacePolicies[index].allowedProviderIDs
+            evaluationWorkspacePolicies[index].blockedModels = input.blockedModels ?? evaluationWorkspacePolicies[index].blockedModels
+            evaluationWorkspacePolicies[index].requireCompanyKey = input.requireCompanyKey ?? evaluationWorkspacePolicies[index].requireCompanyKey
+            evaluationWorkspacePolicies[index].preferredProviderID = input.preferredProviderID ?? input.providerID
+            evaluationWorkspacePolicies[index].preferredModel = input.preferredModel ?? input.model
+            evaluationWorkspacePolicies[index].setupSourceDetail = evaluationWorkspacePolicies[index].setupSourceDetail ?? "Evaluated from tokenbar.yml via local policy check."
         } else {
-            workspacePolicies.append(WorkspacePolicy(
+            evaluationWorkspacePolicies.append(WorkspacePolicy(
                 id: input.workspaceID,
                 name: input.workspaceName ?? titleFromWorkspaceID(input.workspaceID),
                 pathHint: input.workspacePath ?? "~",
@@ -1382,18 +1416,13 @@ final class AppState: ObservableObject {
                 requireCompanyKey: input.requireCompanyKey ?? false,
                 preferredProviderID: input.preferredProviderID ?? input.providerID,
                 preferredModel: input.preferredModel ?? input.model,
-                setupSourceDetail: "Created from tokenbar.yml via local policy check.",
+                setupSourceDetail: "Evaluated from tokenbar.yml via local policy check.",
                 configuredModelCount: nil,
                 inferredFromPaths: [input.workspacePath].compactMap { $0 }
             ))
         }
 
-        ensureProviderExists(providerID: input.providerID)
-        for providerID in input.allowedProviderIDs ?? [] {
-            ensureProviderExists(providerID: providerID)
-        }
-        persistWorkspacePolicies()
-        notifyStatusBarUpdate()
+        return evaluationWorkspacePolicies
     }
 
     private func ensureProviderExists(providerID: String) {
@@ -1768,6 +1797,28 @@ private struct SmartRoutingCandidate {
     var providerID: String
     var model: String
     var sourceRank: Int
+}
+
+private struct ScoredSmartRoutingCandidate {
+    var candidate: SmartRoutingCandidate
+    var score: Double
+    var route: SmartRoutingRouteStats?
+    var estimatedCost: Double
+}
+
+private extension PolicyEvaluationInput {
+    var hasTransientWorkspacePolicyFields: Bool {
+        allowedProviderIDs != nil ||
+            blockedModels != nil ||
+            dailyBudget != nil ||
+            monthlyBudget != nil ||
+            maxEstimatedRunCost != nil ||
+            requireCompanyKey != nil ||
+            workspaceName != nil ||
+            workspacePath != nil ||
+            preferredProviderID != nil ||
+            preferredModel != nil
+    }
 }
 
 extension Notification.Name {
