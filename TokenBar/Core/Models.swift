@@ -150,6 +150,16 @@ enum UsageDataSource: String, Codable {
     case error
 }
 
+struct ProviderHealthAlert: Codable, Equatable, Identifiable {
+    var status: UsageStatus
+    var title: String
+    var detail: String
+
+    var id: String {
+        [status.rawValue, title, detail].joined(separator: "|")
+    }
+}
+
 enum ModelUsageSource: String, Codable {
     case localAgent
     case configured
@@ -205,6 +215,7 @@ struct ProviderUsage: Identifiable, Codable, Equatable {
     var requestCountKnown: Bool?
     var spendTodayKnown: Bool? = nil
     var spendMonthKnown: Bool? = nil
+    var healthAlerts: [ProviderHealthAlert]? = nil
 
     var usageRatio: Double {
         guard hasKnownQuotaLimit else { return 0 }
@@ -276,6 +287,13 @@ struct ProviderUsage: Identifiable, Codable, Equatable {
     }
 
     var status: UsageStatus {
+        if activeHealthAlerts.contains(where: { $0.status == .critical }) {
+            return .critical
+        }
+        if activeHealthAlerts.contains(where: { $0.status == .warning }) {
+            return .warning
+        }
+
         if let predictedExhaustion {
             let hours = predictedExhaustion.timeIntervalSinceNow / 3600
             if hours < 6 { return .critical }
@@ -285,6 +303,19 @@ struct ProviderUsage: Identifiable, Codable, Equatable {
         if usageRatio >= 0.9 { return .critical }
         if usageRatio >= 0.7 { return .warning }
         return .healthy
+    }
+
+    var activeHealthAlerts: [ProviderHealthAlert] {
+        healthAlerts ?? []
+    }
+
+    var primaryHealthAlert: ProviderHealthAlert? {
+        activeHealthAlerts.sorted {
+            if $0.status != $1.status {
+                return $0.status.rank > $1.status.rank
+            }
+            return $0.title < $1.title
+        }.first
     }
 
     var sourceKind: UsageDataSource {
@@ -322,6 +353,7 @@ struct ProviderUsage: Identifiable, Codable, Equatable {
         history = snapshot.history.isEmpty ? [UsagePoint(timestamp: snapshot.fetchedAt, value: snapshot.tokenTotal)] : snapshot.history
         dataSource = .live
         sourceUpdatedAt = snapshot.fetchedAt
+        healthAlerts = nil
         sourceDetail = "OpenAI organization usage and cost APIs. \(snapshot.requestCountMonth) requests this month, \(snapshot.currency.uppercased()) costs. Organization quota limits stay in the OpenAI console."
     }
 
@@ -344,6 +376,7 @@ struct ProviderUsage: Identifiable, Codable, Equatable {
         history = snapshot.history.isEmpty ? [UsagePoint(timestamp: snapshot.fetchedAt, value: snapshot.tokenTotal)] : snapshot.history
         dataSource = .live
         sourceUpdatedAt = snapshot.fetchedAt
+        healthAlerts = nil
         sourceDetail = "Anthropic Usage and Cost Admin API. Token and cost data are live; message request counts and console spend limits stay outside this public Admin API."
     }
 
@@ -366,6 +399,7 @@ struct ProviderUsage: Identifiable, Codable, Equatable {
         history = snapshot.history.isEmpty ? [UsagePoint(timestamp: snapshot.fetchedAt, value: snapshot.totalUsage)] : snapshot.history
         dataSource = .live
         sourceUpdatedAt = snapshot.fetchedAt
+        healthAlerts = nil
         sourceDetail = "OpenRouter Credits API. Total credits and total usage are live; token buckets, request counts, and period spend are not exposed by this endpoint."
     }
 
@@ -388,6 +422,7 @@ struct ProviderUsage: Identifiable, Codable, Equatable {
         history = snapshot.history
         dataSource = .live
         sourceUpdatedAt = snapshot.fetchedAt
+        healthAlerts = nil
 
         let primaryLabel = Self.quotaWindowLabel(seconds: snapshot.primaryWindowSeconds, fallback: "5-hour window")
         var detail = "Codex login quota from local ~/.codex/auth.json and ChatGPT wham usage. \(primaryLabel) is \(Int(snapshot.primaryUsedPercent))% used."
@@ -437,6 +472,7 @@ struct ProviderUsage: Identifiable, Codable, Equatable {
         lastUpdated = snapshot.fetchedAt
         dataSource = .ccSwitch
         sourceUpdatedAt = snapshot.fetchedAt
+        healthAlerts = snapshot.healthAlerts.isEmpty ? nil : snapshot.healthAlerts
         sourceDetail = snapshot.sourceDetail
     }
 
@@ -459,6 +495,7 @@ struct ProviderUsage: Identifiable, Codable, Equatable {
         history = snapshot.history
         dataSource = .live
         sourceUpdatedAt = snapshot.fetchedAt
+        healthAlerts = nil
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .short
         let intervalReset = formatter.localizedString(for: snapshot.intervalResetAt, relativeTo: snapshot.fetchedAt)
@@ -519,6 +556,7 @@ struct ProviderUsage: Identifiable, Codable, Equatable {
         }
         dataSource = .localAgent
         sourceUpdatedAt = localUsage.occurredAt
+        healthAlerts = nil
         sourceDetail = localUsage.sourceDetail
     }
 
@@ -542,6 +580,9 @@ struct ProviderUsage: Identifiable, Codable, Equatable {
         sourceDetail = detail
         sourceUpdatedAt = now
         lastUpdated = now
+        healthAlerts = source == .error ? [
+            ProviderHealthAlert(status: .critical, title: "Provider refresh failed", detail: detail)
+        ] : nil
     }
 
     private static func primaryQuotaWindow(from windows: [CCSwitchQuotaWindow]) -> CCSwitchQuotaWindow? {

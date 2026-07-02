@@ -2,6 +2,14 @@ import AppKit
 import SwiftUI
 
 extension UsageStatus {
+    var rank: Int {
+        switch self {
+        case .healthy: 0
+        case .warning: 1
+        case .critical: 2
+        }
+    }
+
     var color: Color {
         switch self {
         case .healthy: .green

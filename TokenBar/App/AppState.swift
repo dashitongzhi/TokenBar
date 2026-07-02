@@ -888,6 +888,11 @@ final class AppState: ObservableObject {
         }
 
         if let urgent = mostUrgentProvider, urgent.status != .healthy {
+            if let alert = urgent.primaryHealthAlert {
+                return language == .english
+                ? "\(urgent.name) is \(alert.status.rawValue): \(alert.detail)"
+                : "\(urgent.name) \(alert.status == .critical ? "严重" : "警告")：\(alert.detail)"
+            }
             let hours = urgent.predictedExhaustion.map { max($0.timeIntervalSinceNow / 3600, 0) } ?? 0
             return language == .english
             ? "\(urgent.name) is trending hot. At the current pace it may run out in \(String(format: "%.1f", hours))h."
