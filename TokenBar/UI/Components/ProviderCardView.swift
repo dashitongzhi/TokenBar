@@ -20,7 +20,14 @@ struct ProviderCardView: View {
                         .foregroundStyle(provider.status.color)
                 }
                 Spacer()
+                if provider.status != .healthy {
+                    StatusPill(status: provider.status)
+                }
                 SourcePill(source: provider.sourceKind)
+            }
+
+            if let alert = provider.primaryHealthAlert {
+                ProviderHealthAlertView(alert: alert)
             }
 
             if provider.sourceDescription.isEmpty == false {
@@ -111,5 +118,31 @@ struct ProviderCardView: View {
             Text(value)
                 .font(.caption.monospacedDigit().weight(.medium))
         }
+    }
+}
+
+private struct ProviderHealthAlertView: View {
+    var alert: ProviderHealthAlert
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: alert.status.symbolName)
+                .foregroundStyle(alert.status.color)
+                .frame(width: 16)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(alert.title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(alert.status.color)
+                Text(alert.detail)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(8)
+        .background(alert.status.color.opacity(0.10))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 }

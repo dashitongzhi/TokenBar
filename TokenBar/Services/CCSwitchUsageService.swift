@@ -28,6 +28,7 @@ struct CCSwitchProviderUsageSnapshot: Equatable {
     var monthResetAt: Date
     var quotaWindows: [CCSwitchQuotaWindow]
     var history: [UsagePoint]
+    var healthAlerts: [ProviderHealthAlert]
     var sourceDetail: String
     var fetchedAt: Date
 }
@@ -316,11 +317,16 @@ struct CCSwitchUsageService {
                 }
                 let healthyRecords = providerRecords.filter { normalizedProvider(record: $0) == aggregate.provider }
                 let healthItems = healthyRecords.compactMap { health["\($0.appType):\($0.id)"] }
-                if healthItems.contains(where: { $0.isHealthy }) {
+                if let failures = Self.maxConsecutiveFailures(from: healthItems) {
+                    detail += " CC Switch health reports \(failures) consecutive failures."
+                } else if healthItems.contains(where: { $0.isHealthy }) {
                     detail += " CC Switch health has a recent successful route."
-                } else if let unhealthy = healthItems.first(where: { $0.isHealthy == false }) {
-                    detail += " CC Switch health reports \(unhealthy.consecutiveFailures) consecutive failures."
                 }
+                let healthAlerts = Self.healthAlerts(
+                    provider: aggregate.provider,
+                    healthItems: healthItems,
+                    deepSeekBalance: aggregate.provider == .deepSeek ? deepSeekBalance : nil
+                )
                 if aggregate.provider == .deepSeek, let deepSeekBalance {
                     detail += " DeepSeek live balance: \(deepSeekBalance.currency) \(String(format: "%.2f", deepSeekBalance.totalBalance)); API available: \(deepSeekBalance.isAvailable ? "yes" : "no")."
                 }
@@ -375,6 +381,7 @@ struct CCSwitchUsageService {
                     monthResetAt: monthResetAt,
                     quotaWindows: providerQuotaWindows,
                     history: aggregate.history(),
+                    healthAlerts: healthAlerts,
                     sourceDetail: detail,
                     fetchedAt: now
                 )
@@ -443,6 +450,53 @@ struct CCSwitchUsageService {
         windows.first(where: { $0.modelName == "general" && ($0.hasKnownIntervalLimit || $0.hasKnownWeeklyLimit) })
             ?? windows.first(where: { $0.hasKnownIntervalLimit || $0.hasKnownWeeklyLimit })
             ?? windows.first
+    }
+
+    private static func healthAlerts(
+        provider: CCSwitchKnownProvider,
+        healthItems: [CCSwitchProviderHealth],
+        deepSeekBalance: DeepSeekBalance?
+    ) -> [ProviderHealthAlert] {
+        var alerts: [ProviderHealthAlert] = []
+        if let failures = maxConsecutiveFailures(from: healthItems) {
+            let status: UsageStatus = failures >= 10 ? .critical : .warning
+            alerts.append(ProviderHealthAlert(
+                status: status,
+                title: "\(failures) consecutive CC Switch failures",
+                detail: "\(provider.displayName) has \(failures) consecutive failed CC Switch route checks."
+            ))
+        }
+
+        if provider == .deepSeek, let deepSeekBalance {
+            let amount = "\(deepSeekBalance.currency.uppercased()) \(String(format: "%.2f", deepSeekBalance.totalBalance))"
+            if deepSeekBalance.totalBalance < 0, deepSeekBalance.isAvailable == false {
+                alerts.append(ProviderHealthAlert(
+                    status: .critical,
+                    title: "Negative balance and API unavailable",
+                    detail: "DeepSeek balance is \(amount), and the balance API reports unavailable."
+                ))
+            } else if deepSeekBalance.totalBalance < 0 {
+                alerts.append(ProviderHealthAlert(
+                    status: .critical,
+                    title: "Negative provider balance",
+                    detail: "DeepSeek balance is \(amount)."
+                ))
+            } else if deepSeekBalance.isAvailable == false {
+                alerts.append(ProviderHealthAlert(
+                    status: .critical,
+                    title: "Provider API unavailable",
+                    detail: "DeepSeek balance API reports unavailable."
+                ))
+            }
+        }
+        return alerts
+    }
+
+    private static func maxConsecutiveFailures(from healthItems: [CCSwitchProviderHealth]) -> Int? {
+        healthItems
+            .filter { $0.isHealthy == false && $0.consecutiveFailures > 0 }
+            .map(\.consecutiveFailures)
+            .max()
     }
 
     private static func usedPercent(used: Double, total: Double, remainingPercent: Double?) -> Double {
