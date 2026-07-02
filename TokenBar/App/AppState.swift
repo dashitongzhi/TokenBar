@@ -1140,10 +1140,16 @@ final class AppState: ObservableObject {
             }
             addAudit(provider: "MiniMax", action: "quota.live", detail: "Fetched MiniMax Token Plan quota: current \(Int(snapshot.intervalUsedPercent))%, weekly \(Int(snapshot.weeklyUsedPercent))%")
         case .unavailable(let detail):
-            if providers[index].sourceKind != .ccSwitch {
+            let hasCCSwitchQuotaFallback = MiniMaxQuotaAuditSemantics.hasCCSwitchQuotaFallback(
+                sourceKindRawValue: providers[index].sourceKind.rawValue,
+                unit: providers[index].unit,
+                hasKnownQuotaLimit: providers[index].hasKnownQuotaLimit
+            )
+            let audit = MiniMaxQuotaAuditSemantics.unavailableAudit(hasCCSwitchQuotaFallback: hasCCSwitchQuotaFallback)
+            if hasCCSwitchQuotaFallback == false {
                 providers[index].markSource(.liveUnavailable, detail: detail, clearUsage: true)
             }
-            addAudit(provider: "MiniMax", action: "quota.needs_key", detail: "MiniMax quota refresh skipped because no API key is available")
+            addAudit(provider: "MiniMax", action: audit.action, detail: audit.detail)
         case .failure(let detail):
             if providers[index].sourceKind != .ccSwitch {
                 providers[index].markSource(.error, detail: detail)
