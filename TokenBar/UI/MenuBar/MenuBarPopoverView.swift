@@ -235,14 +235,14 @@ private struct QuotaWindowRow: View {
                         .font(.caption.weight(.semibold))
                     SourcePill(source: provider.sourceKind)
                         .scaleEffect(0.84, anchor: .leading)
-                    if provider.primaryHealthAlert != nil {
+                    if provider.displayHealthAlert != nil {
                         StatusPill(status: provider.status)
                             .scaleEffect(0.84, anchor: .leading)
                     }
                 }
                 Text(detailText)
                     .font(.caption2)
-                    .foregroundStyle(provider.primaryHealthAlert == nil ? .secondary : provider.status.color)
+                    .foregroundStyle(provider.displayHealthAlert == nil ? .secondary : provider.status.color)
                     .lineLimit(2)
             }
 
@@ -256,7 +256,7 @@ private struct QuotaWindowRow: View {
     }
 
     private var metricText: String {
-        if provider.primaryHealthAlert != nil {
+        if provider.displayHealthAlert != nil {
             return provider.status.rawValue.uppercased()
         }
         if provider.hasKnownQuotaLimit {
@@ -275,7 +275,7 @@ private struct QuotaWindowRow: View {
     }
 
     private var detailText: String {
-        if let alert = provider.primaryHealthAlert {
+        if let alert = provider.displayHealthAlert {
             return alert.detail
         }
         return provider.sourceDescription.isEmpty ? appState.localized("noLiveQuotaYet") : provider.sourceDescription

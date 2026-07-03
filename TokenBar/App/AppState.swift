@@ -888,7 +888,7 @@ final class AppState: ObservableObject {
         }
 
         if let urgent = mostUrgentProvider, urgent.status != .healthy {
-            if let alert = urgent.primaryHealthAlert {
+            if let alert = urgent.displayHealthAlert {
                 return language == .english
                 ? "\(urgent.name) is \(alert.status.rawValue): \(alert.detail)"
                 : "\(urgent.name) \(alert.status == .critical ? "严重" : "警告")：\(alert.detail)"

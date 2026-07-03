@@ -26,7 +26,7 @@ struct ProviderCardView: View {
                 SourcePill(source: provider.sourceKind)
             }
 
-            if let alert = provider.primaryHealthAlert {
+            if let alert = provider.displayHealthAlert {
                 ProviderHealthAlertView(alert: alert)
             }
 

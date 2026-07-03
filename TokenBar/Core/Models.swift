@@ -323,6 +323,13 @@ struct ProviderUsage: Identifiable, Codable, Equatable {
         }.first
     }
 
+    var displayHealthAlert: ProviderHealthAlert? {
+        guard let alert = primaryHealthAlert, alert.status.rank >= status.rank else {
+            return nil
+        }
+        return alert
+    }
+
     var sourceKind: UsageDataSource {
         dataSource ?? .unsupported
     }
