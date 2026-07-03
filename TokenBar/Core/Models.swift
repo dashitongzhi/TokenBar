@@ -713,6 +713,7 @@ struct SmartRoutingStatsSnapshot: Codable, Equatable {
     var actualCostTotal: Double
     var estimatedTokensTotal: Int
     var actualTokensTotal: Int
+    var excludedNonProductionRuns: Int
     var routeStats: [SmartRoutingRouteStats]
     var recentRuns: [SmartRoutingRunRecord]
 }

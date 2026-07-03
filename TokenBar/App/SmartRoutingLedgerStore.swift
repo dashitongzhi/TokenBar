@@ -47,7 +47,8 @@ struct SmartRoutingLedgerStore {
     }
 
     func stats(now: Date = .now) -> SmartRoutingStatsSnapshot {
-        let records = pruned(load(), now: now).sorted { $0.occurredAt > $1.occurredAt }
+        let allRecords = pruned(load(), now: now).sorted { $0.occurredAt > $1.occurredAt }
+        let records = allRecords.filter(Self.isProductionRecommendationEligible)
         let routes = Dictionary(grouping: records, by: Self.routeKey)
             .map { key, values in
                 routeStats(routeKey: key, records: values)
@@ -76,8 +77,25 @@ struct SmartRoutingLedgerStore {
             actualCostTotal: records.reduce(0) { $0 + $1.actualCost },
             estimatedTokensTotal: records.reduce(0) { $0 + $1.estimatedTokens },
             actualTokensTotal: records.reduce(0) { $0 + $1.actualTokens },
+            excludedNonProductionRuns: allRecords.count - records.count,
             routeStats: routes,
             recentRuns: Array(records.prefix(20))
+        )
+    }
+
+    nonisolated static func isProductionRecommendationEligible(_ record: SmartRoutingRunRecord) -> Bool {
+        SmartRoutingRecommendationEligibility.isProductionRecommendationEligible(
+            SmartRoutingRecommendationMarker(
+                taskIntent: record.taskIntent,
+                workspaceID: record.workspaceID,
+                workspaceName: record.workspaceName,
+                sessionID: record.sessionID,
+                taskID: record.taskID,
+                selectedBy: record.selectedBy,
+                model: record.model,
+                routingReason: record.routingReason,
+                metadata: record.metadata
+            )
         )
     }
 
