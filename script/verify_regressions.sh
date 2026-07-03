@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+"$ROOT_DIR/script/verify_minimax_ccswitch_fallback_audit.sh"
+"$ROOT_DIR/script/verify_provider_status_severity.sh"
+"$ROOT_DIR/script/verify_smart_routing_production_stats.sh"

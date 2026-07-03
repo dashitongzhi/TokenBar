@@ -7,6 +7,7 @@ mkdir -p "$BUILD_DIR"
 
 swiftc \
   "$ROOT_DIR/TokenBar/Core/Models.swift" \
+  "$ROOT_DIR/TokenBar/Core/ModelPresentation.swift" \
   "$ROOT_DIR/script/verify_provider_status_severity.swift" \
   -o "$BUILD_DIR/verify_provider_status_severity"
 

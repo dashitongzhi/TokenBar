@@ -1,15 +1,5 @@
 import Foundation
 
-extension UsageStatus {
-    var rank: Int {
-        switch self {
-        case .healthy: 0
-        case .warning: 1
-        case .critical: 2
-        }
-    }
-}
-
 struct OpenAIUsageSnapshot {
     var tokenTotal: Double
     var tokenToday: Double
