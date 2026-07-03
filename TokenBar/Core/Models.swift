@@ -287,22 +287,27 @@ struct ProviderUsage: Identifiable, Codable, Equatable {
     }
 
     var status: UsageStatus {
-        if activeHealthAlerts.contains(where: { $0.status == .critical }) {
-            return .critical
-        }
-        if activeHealthAlerts.contains(where: { $0.status == .warning }) {
-            return .warning
-        }
-
+        let quotaStatus: UsageStatus
         if let predictedExhaustion {
             let hours = predictedExhaustion.timeIntervalSinceNow / 3600
-            if hours < 6 { return .critical }
-            if hours < 24 { return .warning }
+            if hours < 6 {
+                quotaStatus = .critical
+            } else if hours < 24 {
+                quotaStatus = .warning
+            } else {
+                quotaStatus = .healthy
+            }
+        } else if usageRatio >= 0.9 {
+            quotaStatus = .critical
+        } else if usageRatio >= 0.7 {
+            quotaStatus = .warning
+        } else {
+            quotaStatus = .healthy
         }
 
-        if usageRatio >= 0.9 { return .critical }
-        if usageRatio >= 0.7 { return .warning }
-        return .healthy
+        return activeHealthAlerts.reduce(quotaStatus) { current, alert in
+            alert.status.rank > current.rank ? alert.status : current
+        }
     }
 
     var activeHealthAlerts: [ProviderHealthAlert] {
