@@ -133,6 +133,7 @@ enum LocalAPIPayloadBuilder {
                 "platform": provider.id,
                 "displayName": provider.name,
                 "status": provider.status.rawValue,
+                "healthAlerts": provider.activeHealthAlerts.map(healthAlertDictionary),
                 "dataSource": provider.sourceKind.rawValue,
                 "sourceDetail": provider.sourceDescription,
                 "metrics": [metric]
@@ -168,9 +169,18 @@ enum LocalAPIPayloadBuilder {
             "spendMonth": provider.hasKnownSpendMonth ? provider.spendMonth as Any : NSNull() as Any,
             "currency": provider.displayCurrency,
             "predictedExhaustion": provider.predictedExhaustion.map { ISO8601DateFormatter().string(from: $0) } ?? NSNull(),
+            "healthAlerts": provider.activeHealthAlerts.map(healthAlertDictionary),
             "recommendation": recommendation
         ]
         return jsonData(payload)
+    }
+
+    private nonisolated static func healthAlertDictionary(_ alert: ProviderHealthAlert) -> [String: Any] {
+        [
+            "status": alert.status.rawValue,
+            "title": alert.title,
+            "detail": alert.detail
+        ]
     }
 
     private static func policyDictionary(_ decision: PolicyDecision) -> [String: Any] {
