@@ -190,6 +190,8 @@ That offline path is intentionally narrow and predictable: provider allowlists, 
 
 `tokenbar routing record` and `tokenbar routing stats` feed the local Smart Routing ledger. In Guard Only mode those stats are stored and visible through the API but do not change recommendations. In Smart Routing mode, `/policy/evaluate` includes a `smartRouting` object with the recommended provider/model, confidence, evidence count, win rate, and alternatives.
 
+Production recommendation stats exclude smoke/test/synthetic evidence before routes are aggregated. A run is excluded when `taskIntent` or `selectedBy` is exactly `smoke`, `test`, `synthetic`, or `fixture`; when `workspaceID`, `workspaceName`, `sessionID`, or `taskID` is `smoke-routing-ledger` or is marked with those words as dash-delimited identifiers; when metadata uses those keys with truthy values or `env`/`environment` names one of those values; or when a synthetic model marker such as `*-unknown-cost` is recorded. Raw records remain in `smart-routing-runs.json`, and `/routing/stats` reports `excludedNonProductionRuns`.
+
 ## Project Policy
 
 Use `tokenbar policy init` from a repo root to scaffold a project-local policy:
@@ -474,6 +476,12 @@ Run CLI smoke checks:
 printf '{"model":"gpt-5","prompt":"Implement the CLI preflight estimate and verify the hook."}' | ./bin/tokenbar check --agent codex --provider openai --codex-hook-json --intent implement --json
 ./bin/tokenbar check --agent codex --provider anthropic --model claude-sonnet --estimated-cost 0.20 --estimated-tokens 12000 --intent debug
 ./bin/tokenbar check --agent codex --provider openai --model gpt-5 --estimated-cost 0 --estimated-tokens 0 --intent implement
+```
+
+Verify Smart Routing production stats filtering:
+
+```bash
+./script/verify_smart_routing_production_stats.sh
 ```
 
 ## Release Packaging

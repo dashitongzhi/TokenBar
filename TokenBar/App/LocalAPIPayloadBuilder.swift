@@ -94,7 +94,8 @@ enum LocalAPIPayloadBuilder {
                 "estimatedCostTotal": snapshot.estimatedCostTotal,
                 "actualCostTotal": snapshot.actualCostTotal,
                 "estimatedTokensTotal": snapshot.estimatedTokensTotal,
-                "actualTokensTotal": snapshot.actualTokensTotal
+                "actualTokensTotal": snapshot.actualTokensTotal,
+                "excludedNonProductionRuns": snapshot.excludedNonProductionRuns
             ],
             "routes": snapshot.routeStats.map(smartRoutingRouteDictionary),
             "recentRuns": snapshot.recentRuns.map(smartRoutingRunDictionary)
