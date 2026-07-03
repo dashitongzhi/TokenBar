@@ -85,18 +85,33 @@ private enum VerifySmartRoutingProductionStats {
             routingReason: "Based on recorded production runs.",
             metadata: ["source": "local-agent"]
         )
+        let productionWithFreeformReason = SmartRoutingRecommendationMarker(
+            taskIntent: "implementation",
+            workspaceID: "tokenbar",
+            workspaceName: "TokenBar",
+            sessionID: "session-3",
+            taskID: "task-3",
+            selectedBy: "smart-routing",
+            model: "gpt-5",
+            routingReason: "Not synthetic; replaces smoke baseline with live evidence.",
+            metadata: ["source": "local-agent"]
+        )
 
-        let markers = [smokeOpenAI, smokeUnknownCost, metadataSynthetic, production]
+        let markers = [smokeOpenAI, smokeUnknownCost, metadataSynthetic, production, productionWithFreeformReason]
         let eligible = markers.filter(SmartRoutingRecommendationEligibility.isProductionRecommendationEligible)
 
-        try expect(eligible.count == 1, "only the production marker should remain eligible.")
+        try expect(eligible.count == 2, "only the production markers should remain eligible.")
         try expect(
-            eligible.first == production,
+            eligible == [production, productionWithFreeformReason],
             "smoke-routing-ledger, synthetic metadata, and unknown-cost smoke models must be excluded."
         )
         try expect(
             SmartRoutingRecommendationEligibility.isProductionRecommendationEligible(smokeUnknownCost) == false,
             "claude-opus-unknown-cost smoke success must not become recommendation evidence."
+        )
+        try expect(
+            SmartRoutingRecommendationEligibility.isProductionRecommendationEligible(productionWithFreeformReason),
+            "free-form routing reasons must not exclude production evidence."
         )
 
         let records = [

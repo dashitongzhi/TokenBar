@@ -39,7 +39,7 @@ enum SmartRoutingRecommendationEligibility {
             isNonProductionIdentifier(marker.taskID) {
             return false
         }
-        if isSyntheticModel(marker.model) || containsExplicitSyntheticReason(marker.routingReason) {
+        if isSyntheticModel(marker.model) {
             return false
         }
         return hasNonProductionMetadata(marker.metadata) == false
@@ -69,11 +69,6 @@ enum SmartRoutingRecommendationEligibility {
     nonisolated private static func isSyntheticModel(_ value: String?) -> Bool {
         guard let normalized = normalized(value), normalized.isEmpty == false else { return false }
         return normalized.hasSuffix("-unknown-cost") || normalized.contains("-synthetic-")
-    }
-
-    nonisolated private static func containsExplicitSyntheticReason(_ value: String?) -> Bool {
-        guard let normalized = normalized(value), normalized.isEmpty == false else { return false }
-        return normalized.contains("synthetic") || normalized.contains("smoke")
     }
 
     nonisolated private static func hasNonProductionMetadata(_ metadata: [String: String]) -> Bool {
