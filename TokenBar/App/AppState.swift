@@ -182,6 +182,9 @@ final class AppState: ObservableObject {
     private var hasExplicitSelectedAgentPreference = false
     private var hasExplicitSelectedModelPreference = false
     private var isApplyingInferredSelections = false
+    #if DEBUG
+    private var isPersistenceSuppressedForVerification = false
+    #endif
 
     private init() {
         let savedPreferences = preferencesStore.load()
@@ -1031,10 +1034,16 @@ final class AppState: ObservableObject {
         if auditEvents.count > 100 {
             auditEvents.removeLast(auditEvents.count - 100)
         }
+        #if DEBUG
+        guard isPersistenceSuppressedForVerification == false else { return }
+        #endif
         auditEventStore.save(auditEvents)
     }
 
     private func persistProviders() {
+        #if DEBUG
+        guard isPersistenceSuppressedForVerification == false else { return }
+        #endif
         providerStore.save(providers)
     }
 
@@ -1832,8 +1841,12 @@ final class AppState: ObservableObject {
     func verifyMiniMaxCCSwitchFallbackAuditSmoke() throws {
         let originalProviders = providers
         let originalAuditEvents = auditEvents
+        let wasPersistenceSuppressed = isPersistenceSuppressedForVerification
+
+        isPersistenceSuppressedForVerification = true
 
         defer {
+            isPersistenceSuppressedForVerification = wasPersistenceSuppressed
             providers = originalProviders
             auditEvents = originalAuditEvents
             persistProviders()
