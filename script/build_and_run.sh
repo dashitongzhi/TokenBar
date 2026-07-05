@@ -280,6 +280,8 @@ case "$MODE" in
     enable_local_api_for_verify
     open_verify_app
     verify_app
+    stage "Running authenticated local API contract smoke"
+    "$ROOT_DIR/script/smoke_local_api_contract.sh"
     stage "Running local API routing stats smoke"
     bash "$ROOT_DIR/script/smoke_local_api_routing_stats.sh"
     stage "Running local API transient policy smoke"
