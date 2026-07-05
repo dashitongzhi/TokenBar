@@ -282,6 +282,8 @@ case "$MODE" in
     verify_app
     stage "Running local API transient policy smoke"
     "$ROOT_DIR/script/smoke_policy_evaluate_no_persist.sh"
+    stage "Running regression verification suite"
+    "$ROOT_DIR/script/verify_regressions.sh"
     ;;
   *)
     echo "usage: $0 [run|--debug|--logs|--telemetry|--verify]" >&2
