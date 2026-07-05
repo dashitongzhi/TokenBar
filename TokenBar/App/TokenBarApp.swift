@@ -1,3 +1,4 @@
+import Darwin
 import SwiftUI
 
 @main
@@ -6,6 +7,19 @@ struct TokenBarApp: App {
     @StateObject private var appState = AppState.shared
 
     init() {
+        #if DEBUG
+        if CommandLine.arguments.contains("--tokenbar-verify-minimax-ccswitch-fallback-audit") {
+            do {
+                try AppState.shared.verifyMiniMaxCCSwitchFallbackAuditSmoke()
+                FileHandle.standardError.write(Data("TokenBar verify mode: MiniMax CC Switch fallback audit smoke passed\n".utf8))
+                exit(0)
+            } catch {
+                FileHandle.standardError.write(Data("TokenBar verify mode: MiniMax CC Switch fallback audit smoke failed: \(error)\n".utf8))
+                exit(1)
+            }
+        }
+        #endif
+
         // Used by script/build_and_run.sh --verify to exercise LocalAPIServer without LaunchServices.
         if CommandLine.arguments.contains("--tokenbar-verify-local-api") {
             FileHandle.standardError.write(Data("TokenBar verify mode: starting local API\n".utf8))
