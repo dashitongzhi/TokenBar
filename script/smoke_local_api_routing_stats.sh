@@ -3,7 +3,7 @@ set -euo pipefail
 
 API_URL="${TOKENBAR_API_URL:-http://127.0.0.1:3847}"
 TOKEN_PATH="${TOKENBAR_API_TOKEN_PATH:-$HOME/Library/Application Support/TokenBar/local-api-token}"
-LEDGER_PATH="${TOKENBAR_SMART_ROUTING_LEDGER_PATH:-$HOME/Library/Application Support/TokenBar/smart-routing-runs.json}"
+LEDGER_PATH="$HOME/Library/Application Support/TokenBar/smart-routing-runs.json"
 
 ROUTING_LEDGER_BACKUP_PATH=""
 ROUTING_LEDGER_EXISTED=0

@@ -287,7 +287,9 @@ private nonisolated struct AnthropicUsageResult: Decodable {
     var serverToolUse: AnthropicServerToolUse?
 
     var tokenTotal: Double {
-        let inputTotal = inputTokens ?? ((uncachedInputTokens ?? 0) + (cacheCreationInputTokens ?? cacheCreation?.tokenTotal ?? 0) + (cacheReadInputTokens ?? 0))
+        let cacheCreationTotal = cacheCreationInputTokens ?? cacheCreation?.tokenTotal ?? 0
+        let fallbackInputTotal = (uncachedInputTokens ?? 0) + cacheCreationTotal + (cacheReadInputTokens ?? 0)
+        let inputTotal = inputTokens ?? fallbackInputTotal
         return inputTotal + (outputTokens ?? 0) + (serverToolUse?.tokenTotal ?? 0)
     }
 

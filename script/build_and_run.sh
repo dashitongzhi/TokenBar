@@ -281,7 +281,7 @@ case "$MODE" in
     open_verify_app
     verify_app
     stage "Running local API routing stats smoke"
-    "$ROOT_DIR/script/smoke_local_api_routing_stats.sh"
+    bash "$ROOT_DIR/script/smoke_local_api_routing_stats.sh"
     stage "Running local API transient policy smoke"
     "$ROOT_DIR/script/smoke_policy_evaluate_no_persist.sh"
     ;;
