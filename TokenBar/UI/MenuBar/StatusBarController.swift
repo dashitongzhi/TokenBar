@@ -56,9 +56,10 @@ final class StatusBarController {
     private func updateStatusBar() {
         guard let button = statusItem.button else { return }
         let image = NSImage(named: "TokenBarMenuBarGlyph") ?? NSImage(systemSymbolName: "chart.bar.fill", accessibilityDescription: "TokenBar")
-        image?.isTemplate = true
         image?.size = NSSize(width: 18, height: 17)
-        button.image = image
+        let statusImage = image?.tinted(with: .white)
+        button.image = statusImage
+        button.alternateImage = statusImage
         button.title = appState.statusBarText()
         button.contentTintColor = .white
     }
