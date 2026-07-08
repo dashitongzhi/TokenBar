@@ -100,10 +100,10 @@ private struct CompactRuntimeSnapshotView: View {
                 Divider()
                 runtimeMetric(
                     title: appState.localized("liveData"),
-                    value: "\(appState.liveProviderCount)",
-                    detail: appState.liveProviderCount > 0 ? appState.localized("connectedSources") : appState.localized("sourcesNeedWork"),
+                    value: "\(liveDataProviderCount)",
+                    detail: liveDataProviderCount > 0 ? appState.localized("connectedSources") : appState.localized("sourcesNeedWork"),
                     symbol: "antenna.radiowaves.left.and.right",
-                    color: appState.liveProviderCount > 0 ? .green : .orange
+                    color: liveDataProviderCount > 0 ? .green : .orange
                 )
                 Divider()
                 runtimeMetric(
@@ -146,6 +146,10 @@ private struct CompactRuntimeSnapshotView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .help("\(title): \(detail)")
+    }
+
+    private var liveDataProviderCount: Int {
+        appState.providers.filter(\.isLive).count
     }
 
     private var localAPIColor: Color {
