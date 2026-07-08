@@ -32,6 +32,8 @@
   <span> | </span>
   <a href="#agent-hooks">Agent hooks</a>
   <span> | </span>
+  <a href="README.design-system.md">Design system</a>
+  <span> | </span>
   <a href="#data-sources">Data sources</a>
   <span> | </span>
   <a href="#development">Development</a>

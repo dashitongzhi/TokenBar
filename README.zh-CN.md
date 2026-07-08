@@ -32,6 +32,8 @@
   <span> | </span>
   <a href="#agent-hooks">Agent Hooks</a>
   <span> | </span>
+  <a href="README.design-system.md">设计规范</a>
+  <span> | </span>
   <a href="#数据来源">数据来源</a>
   <span> | </span>
   <a href="#开发">开发</a>
