@@ -22,6 +22,8 @@
 <p align="center">
   <a href="#why-tokenbar">Why TokenBar</a>
   <span> | </span>
+  <a href="#who-it-is-for">Who it is for</a>
+  <span> | </span>
   <a href="#how-it-works">How it works</a>
   <span> | </span>
   <a href="#quick-start">Quick start</a>
@@ -29,6 +31,10 @@
   <a href="#local-api">Local API</a>
   <span> | </span>
   <a href="#agent-hooks">Agent hooks</a>
+  <span> | </span>
+  <a href="README.design-system.md">Design system</a>
+  <span> | </span>
+  <a href="#data-sources">Data sources</a>
   <span> | </span>
   <a href="#development">Development</a>
 </p>
@@ -72,6 +78,22 @@ It is not another API key switcher. Tools like `cc-switch` are good at routing p
 | Hook bridge | Connects Codex and Claude Code preflight plus usage ingestion into the same policy engine. |
 | Smart Routing mode | Optional user-selected mode that recommends a provider/model from recorded outcomes while keeping guard policy enforcement first. |
 | Release path | Builds, verifies, signs ad-hoc for local validation, and packages a DMG. |
+
+## Who It Is For
+
+- Developers who use Codex, Claude Code, or local provider routers on client or company repositories.
+- Teams that need workspace-level cost, model, and key-source policy before an agent run begins.
+- Operators who want a single local view of live provider quota, local agent usage, and policy health.
+- Projects that need repeatable Codex and Claude Code hook setup without hand-rolling shell glue each time.
+- Users who want local-first guardrails without uploading prompts, transcripts, keys, or repository data to a third-party service.
+
+## Runtime Requirements
+
+- macOS 14 or newer.
+- Xcode or Xcode Command Line Tools for local source builds.
+- Optional provider credentials for live usage adapters: OpenAI Admin, Anthropic Admin, OpenRouter, or MiniMax keys.
+- Optional local agent state for usage ingestion: Codex sessions under `~/.codex/`, Claude Code statusline output, and CC Switch state under `~/.cc-switch/`.
+- A running TokenBar app for the authenticated local API path. The CLI still has a narrow offline fallback through `tokenbar.yml`.
 
 ## How It Works
 
@@ -144,6 +166,20 @@ Evaluate a proposed agent run:
 | `1` | Warn |
 | `2` | Block |
 | `3` | CLI, config, or API error |
+
+## First Install: Privacy and Security
+
+TokenBar is currently intended for local development builds and local DMG validation. If you install a packaged build outside the Mac App Store, macOS may ask you to approve it from **System Settings > Privacy & Security** before the first launch.
+
+TokenBar reads only the local state needed for the features you enable:
+
+- Provider keys are read from environment variables or the macOS Keychain.
+- The local API token is stored under `~/Library/Application Support/TokenBar/`.
+- Codex transcript ingestion reads the transcript file you pass to the CLI or hook.
+- Claude Code usage ingestion reads the statusline fields sent by the hook.
+- CC Switch usage reads local proxy state and rollups without importing CC Switch keys into TokenBar.
+
+TokenBar does not upload prompts, transcripts, raw logs, local paths, provider keys, or usage records to a remote service.
 
 ## CLI Command Center
 
@@ -419,6 +455,21 @@ TokenBar is deliberately honest about source quality:
 
 OpenRouter does not expose token buckets, request counts, or period spend through its credits endpoint. TokenBar marks those fields unknown instead of filling them with fake zeros. Anthropic organization usage requires an Admin API key that starts with `sk-ant-admin`; standard Claude API keys do not authorize the organization usage and cost report endpoints.
 
+## Data Sources
+
+TokenBar keeps provider, local, and estimated data visibly separate.
+
+| Source | What it contributes | Trust level |
+| --- | --- | --- |
+| `tokenbar.yml` | Workspace identity, budgets, allowed providers, blocked models, and offline policy fallback. | Project policy |
+| Local API payloads | Authenticated policy decisions, provider status, usage summaries, and Smart Routing stats. | Local runtime |
+| Codex sessions | Transcript token events and cumulative session usage when ingested through the CLI or hooks. | Local record |
+| Claude Code statusline | Recognized cost, token, context-window, and rate-limit fields. | Local record |
+| Provider admin APIs | Organization cost, usage, quota, or credit data when a supported admin key is available. | Live provider |
+| Smart Routing ledger | Local outcome evidence used only when Smart Routing is enabled. | Local estimate |
+
+Unknown values stay unknown. Estimated costs, fallback token counts, and route confidence are treated as estimates, not bills or official quota.
+
 ## Security Model
 
 TokenBar is designed to be local-first:
@@ -495,6 +546,28 @@ Create a local release DMG:
 The release script archives the macOS app, stages a drag-to-Applications DMG, and reports whether the artifact is ad-hoc, Developer ID signed, or notarized. It does not pretend signing or notarization are complete when Apple credentials are missing.
 
 Run `./script/package_release.sh --help` for Developer ID and notarization inputs.
+
+## FAQ
+
+### Is TokenBar an official OpenAI, Anthropic, or OpenRouter product?
+
+No. TokenBar is an independent local macOS tool for policy checks, local API integration, and provider usage visibility.
+
+### Does TokenBar replace provider routers such as CC Switch?
+
+No. Provider routers decide where requests go. TokenBar decides whether a proposed agent run is allowed under the active workspace policy, then records usage and routing outcomes locally.
+
+### Does TokenBar upload my prompts, transcripts, or usage?
+
+No. TokenBar is local-first. Hooks and CLI commands send data to the loopback API on `127.0.0.1`, and provider calls only happen when you configure the matching live adapter key.
+
+### Why do some provider fields show as unknown?
+
+Some APIs do not expose every budget, quota, or token field. TokenBar keeps those fields unknown instead of pretending missing live data is zero spend.
+
+### Can TokenBar block every expensive Codex prompt automatically?
+
+Yes, when the Codex hook is installed and the estimated run cost exceeds the workspace policy. The default gate is cost-policy based; add explicit policy rules if a workspace needs a fixed token ceiling.
 
 ## Current Status
 
