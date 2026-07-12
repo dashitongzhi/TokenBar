@@ -1059,6 +1059,11 @@ module TokenBarCLI
       [
         cwd.join(".claude/settings.local.json"),
         JSON.pretty_generate(
+          "statusLine" => {
+            "type" => "command",
+            "command" => "TOKENBAR_BIN=#{root.join("bin/tokenbar").to_s.inspect} #{root.join("examples/hooks/claude-tokenbar-statusline.sh").to_s.inspect}",
+            "padding" => 0
+          },
           "hooks" => {
             "UserPromptSubmit" => [
               {
