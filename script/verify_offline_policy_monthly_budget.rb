@@ -27,4 +27,17 @@ unless decision.fetch("status") == "block" &&
   exit 1
 end
 
-puts "Verified offline CLI monthly workspace budget enforcement."
+non_openai_input = input.merge("providerID" => "anthropic", "model" => "claude-sonnet", "estimatedCost" => 0.1)
+non_openai_config = {
+  "workspace" => { "id" => "offline-company-key-smoke", "name" => "Offline Company Key Smoke" },
+  "budgets" => { "daily" => 100, "monthly" => 100, "max_run" => 100 },
+  "providers" => { "allowed" => ["anthropic"], "require_company_key" => true },
+  "models" => { "blocked" => [] }
+}
+non_openai_decision = TokenBarCLI.offline_policy_response(non_openai_input, non_openai_config).fetch("decision")
+unless non_openai_decision.fetch("status") == "allow"
+  warn "Offline company-key provider regression: #{non_openai_decision.inspect}"
+  exit 1
+end
+
+puts "Verified offline CLI monthly budget and provider-specific company-key enforcement."

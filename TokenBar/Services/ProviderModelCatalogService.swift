@@ -43,7 +43,10 @@ struct ProviderModelCatalogService {
             case "custom":
                 return .success(try await fetchOpenAICompatible(providerID: provider, baseURL: baseURL, apiKey: key, now: now))
             default:
-                return .unavailable("Model refresh is only available for supported providers.")
+                // Inferred providers have no default endpoint or credential source.
+                // An explicit validated HTTPS URL preserves the existing
+                // OpenAI-compatible catalog refresh without sending a key.
+                return .success(try await fetchOpenAICompatible(providerID: provider, baseURL: baseURL, apiKey: key, now: now))
             }
         } catch let error as ProviderModelCatalogEndpointError {
             return .failure(error.localizedDescription)

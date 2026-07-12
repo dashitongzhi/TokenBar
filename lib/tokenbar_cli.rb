@@ -1645,7 +1645,7 @@ module TokenBarCLI
       reasons << "Estimated run tokens are above the workspace token cap."
     end
 
-    if workspace["requireCompanyKey"]
+    if workspace["requireCompanyKey"] && input["providerID"] == "openai"
       status = "block"
       reasons << "Offline policy cannot verify a company-managed key; start the TokenBar app with a stored OpenAI organization credential."
     end
