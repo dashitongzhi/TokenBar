@@ -5,11 +5,15 @@ struct SmartRoutingLedgerStore {
     private let maxRecords = 2_000
     private let retentionSeconds: TimeInterval = 90 * 24 * 3600
 
-    init(fileManager: FileManager = .default) {
+    init(fileManager: FileManager = .default, storeURL: URL? = nil) {
+        if let storeURL {
+            self.storeURL = storeURL
+            return
+        }
         let support = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? fileManager.temporaryDirectory
         let directory = support.appendingPathComponent("TokenBar", isDirectory: true)
         try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        storeURL = directory.appendingPathComponent("smart-routing-runs.json")
+        self.storeURL = directory.appendingPathComponent("smart-routing-runs.json")
     }
 
     func record(_ input: SmartRoutingRunInput, fallbackWorkspaceID: String?, fallbackAgent: AgentProvider, now: Date = .now) -> SmartRoutingRunRecord {
@@ -157,7 +161,14 @@ struct SmartRoutingLedgerStore {
             actualCostTotal: actualCost,
             estimatedTokensTotal: estimatedTokens,
             actualTokensTotal: actualTokens,
-            averageCostDelta: knownActualCostRecords.isEmpty == false ? (actualCost - estimatedCost) / Double(knownActualCostRecords.count) : 0,
+            averageCostDelta: SmartRoutingCostMetrics.averageCostDelta(
+                observations: records.map {
+                    SmartRoutingCostObservation(
+                        estimated: $0.hasKnownEstimatedCost ? $0.estimatedCost : nil,
+                        actual: $0.hasKnownActualCost ? $0.actualCost : nil
+                    )
+                }
+            ),
             averageTokenDelta: runCount > 0 ? Double(actualTokens - estimatedTokens) / Double(runCount) : 0,
             lastRunAt: exemplar?.occurredAt ?? .distantPast
         )
@@ -190,6 +201,10 @@ struct SmartRoutingLedgerStore {
 }
 
 private extension SmartRoutingRunRecord {
+    var hasKnownEstimatedCost: Bool {
+        estimatedCostKnown == true
+    }
+
     var hasKnownActualCost: Bool {
         actualCostKnown == true
     }
