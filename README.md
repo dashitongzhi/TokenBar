@@ -353,6 +353,31 @@ tokenbar policy init --claude-hooks
 
 Hook init writes `.codex/hooks.json` and/or `.claude/settings.local.json` using the shell scripts in `examples/hooks/`. Existing files are left untouched unless you pass `--force`, so projects with custom hooks can merge manually.
 
+### Codex
+
+Run `tokenbar policy init --codex-hooks` at the project root. `UserPromptSubmit` estimates prompt/model cost before the run; `Stop` ingests cumulative transcript usage. A `block` decision stops the hook. When the Local API is unavailable, the CLI uses `tokenbar.yml`; unverified company-key provenance blocks rather than trusting caller input.
+
+Verify with:
+
+```bash
+printf '{"model":"gpt-5","prompt":"Run the test suite"}' | \
+  tokenbar check --agent codex --provider openai --codex-hook-json --json
+```
+
+### Claude Code
+
+Run `tokenbar policy init --claude-hooks`. `UserPromptSubmit` performs the same guard check and `statusLine` ingests recognized cost, token, context-window, and rate-limit fields. Policy errors or unsafe input are blocking, not fail-open. Verify by running a Claude Code request and checking TokenBar's audit/workspace usage, or run `./script/build_and_run.sh --verify`.
+
+### Cursor
+
+Cursor has no automatic native-hook installer yet. Use an explicit check in a task or script:
+
+```bash
+tokenbar check --agent cursor --provider openai --model gpt-5 --prompt "Describe the task" --json
+```
+
+Treat `block` or a nonzero exit status as a stop signal. The same project-policy fallback applies when the Local API is unavailable.
+
 | Agent | Preflight | Usage ingestion |
 | --- | --- | --- |
 | Codex | `UserPromptSubmit` calls `tokenbar check` before the run. | `Stop` reads the Codex transcript JSONL and sends cumulative session usage. |

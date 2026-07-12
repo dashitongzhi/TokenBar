@@ -96,8 +96,12 @@ enum LocalAPIPayloadBuilder {
                 "followUpRate": snapshot.followUpRate,
                 "estimatedCostTotal": snapshot.estimatedCostTotal,
                 "actualCostTotal": snapshot.actualCostTotal,
+                "estimatedCostKnownRunCount": snapshot.estimatedCostKnownRunCount,
+                "actualCostKnownRunCount": snapshot.actualCostKnownRunCount,
                 "estimatedTokensTotal": snapshot.estimatedTokensTotal,
                 "actualTokensTotal": snapshot.actualTokensTotal,
+                "estimatedTokensKnownRunCount": snapshot.estimatedTokensKnownRunCount,
+                "actualTokensKnownRunCount": snapshot.actualTokensKnownRunCount,
                 "excludedNonProductionRuns": snapshot.excludedNonProductionRuns
             ],
             "routes": snapshot.routeStats.map(smartRoutingRouteDictionary),
@@ -254,9 +258,11 @@ enum LocalAPIPayloadBuilder {
             "costDelta": record.estimatedCostKnown == true && record.actualCostKnown == true
                 ? record.actualCost - record.estimatedCost
                 : NSNull(),
-            "estimatedTokens": record.estimatedTokens,
-            "actualTokens": record.actualTokens,
-            "tokenDelta": record.actualTokens - record.estimatedTokens,
+            "estimatedTokens": record.estimatedTokensKnown == true ? record.estimatedTokens : NSNull(),
+            "actualTokens": record.actualTokensKnown == true ? record.actualTokens : NSNull(),
+            "tokenDelta": record.estimatedTokensKnown == true && record.actualTokensKnown == true
+                ? record.actualTokens - record.estimatedTokens
+                : NSNull(),
             "inputTokens": record.inputTokens ?? NSNull(),
             "outputTokens": record.outputTokens ?? NSNull(),
             "requestCount": record.requestCount ?? NSNull(),
@@ -285,8 +291,12 @@ enum LocalAPIPayloadBuilder {
             "followUpRate": route.followUpRate,
             "estimatedCostTotal": route.estimatedCostTotal,
             "actualCostTotal": route.actualCostTotal,
+            "estimatedCostKnownRunCount": route.estimatedCostKnownRunCount,
+            "actualCostKnownRunCount": route.actualCostKnownRunCount,
             "estimatedTokensTotal": route.estimatedTokensTotal,
             "actualTokensTotal": route.actualTokensTotal,
+            "estimatedTokensKnownRunCount": route.estimatedTokensKnownRunCount,
+            "actualTokensKnownRunCount": route.actualTokensKnownRunCount,
             "averageCostDelta": route.averageCostDelta,
             "averageTokenDelta": route.averageTokenDelta,
             "lastRunAt": ISO8601DateFormatter().string(from: route.lastRunAt)

@@ -352,6 +352,31 @@ tokenbar policy init --claude-hooks
 
 hook init 会使用 `examples/hooks/` 里的 shell 脚本写入 `.codex/hooks.json` 和/或 `.claude/settings.local.json`。已有文件默认不会被覆盖，除非传入 `--force`，所以有自定义 hooks 的项目可以手动合并。
 
+### Codex
+
+在项目根目录运行 `tokenbar policy init --codex-hooks`。`UserPromptSubmit` 会在运行前按 prompt 和模型估算成本；`Stop` 摄取累计 transcript 用量。策略返回 `block` 时 hook 会阻止执行。Local API 不可用时 CLI 使用 `tokenbar.yml`；无法验证公司密钥来源时保守阻止，不信任调用方输入。
+
+验证命令：
+
+```bash
+printf '{"model":"gpt-5","prompt":"Run the test suite"}' | \
+  tokenbar check --agent codex --provider openai --codex-hook-json --json
+```
+
+### Claude Code
+
+运行 `tokenbar policy init --claude-hooks`。`UserPromptSubmit` 执行同一策略检查，`statusLine` 摄取可识别的成本、Token、上下文窗口和限流字段。策略错误或不安全输入按阻止处理，不会 fail-open。可在 Claude Code 中发起一次请求后检查 TokenBar 审计/工作区用量，或运行 `./script/build_and_run.sh --verify`。
+
+### Cursor
+
+Cursor 尚无自动安装的原生 hook。请在 task 或脚本中显式检查：
+
+```bash
+tokenbar check --agent cursor --provider openai --model gpt-5 --prompt "Describe the task" --json
+```
+
+返回 `block` 或非零退出码时应停止执行。Local API 不可用时同样使用项目策略回退。
+
 | Agent | 运行前检查 | 用量摄取 |
 | --- | --- | --- |
 | Codex | `UserPromptSubmit` 在运行前调用 `tokenbar check`。 | `Stop` 读取 Codex transcript JSONL，并发送累计 session 用量。 |

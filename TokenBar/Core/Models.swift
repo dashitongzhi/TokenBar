@@ -749,6 +749,8 @@ struct SmartRoutingRunRecord: Identifiable, Codable, Equatable {
     var actualCostKnown: Bool? = nil
     var estimatedTokens: Int
     var actualTokens: Int
+    var estimatedTokensKnown: Bool? = nil
+    var actualTokensKnown: Bool? = nil
     var inputTokens: Int?
     var outputTokens: Int?
     var requestCount: Int?
@@ -779,8 +781,12 @@ struct SmartRoutingRouteStats: Identifiable, Codable, Equatable {
     var followUpRate: Double
     var estimatedCostTotal: Double
     var actualCostTotal: Double
+    var estimatedCostKnownRunCount: Int
+    var actualCostKnownRunCount: Int
     var estimatedTokensTotal: Int
     var actualTokensTotal: Int
+    var estimatedTokensKnownRunCount: Int
+    var actualTokensKnownRunCount: Int
     var averageCostDelta: Double
     var averageTokenDelta: Double
     var lastRunAt: Date
@@ -797,8 +803,12 @@ struct SmartRoutingStatsSnapshot: Codable, Equatable {
     var followUpRate: Double
     var estimatedCostTotal: Double
     var actualCostTotal: Double
+    var estimatedCostKnownRunCount: Int
+    var actualCostKnownRunCount: Int
     var estimatedTokensTotal: Int
     var actualTokensTotal: Int
+    var estimatedTokensKnownRunCount: Int
+    var actualTokensKnownRunCount: Int
     var excludedNonProductionRuns: Int
     var routeStats: [SmartRoutingRouteStats]
     var recentRuns: [SmartRoutingRunRecord]

@@ -754,8 +754,8 @@ final class AppState: ObservableObject {
     }
 
     private func estimatedCost(candidate: SmartRoutingCandidate, route: SmartRoutingRouteStats?, baseInput: PolicyEvaluationInput) -> Double? {
-        if let route, route.runCount > 0, route.actualCostTotal > 0 {
-            return route.actualCostTotal / Double(route.runCount)
+        if let route, route.actualCostKnownRunCount > 0, route.actualCostTotal > 0 {
+            return route.actualCostTotal / Double(route.actualCostKnownRunCount)
         }
         if candidate.providerID == baseInput.providerID &&
             candidate.model.caseInsensitiveCompare(baseInput.model) == .orderedSame {

@@ -53,8 +53,12 @@ write_routing_fixture() {
         "taskID" => "#{fixture_id}-task-#{index}",
         "estimatedCost" => 0.2,
         "actualCost" => 0.18,
+        "estimatedCostKnown" => true,
+        "actualCostKnown" => true,
         "estimatedTokens" => 1000,
         "actualTokens" => 900,
+        "estimatedTokensKnown" => true,
+        "actualTokensKnown" => true,
         "inputTokens" => 600,
         "outputTokens" => 300,
         "requestCount" => 1,
@@ -149,10 +153,13 @@ assert_routing_stats() {
     abort "expected 4 excluded non-production runs, got #{excluded}" unless excluded == 4
     abort "expected exactly 1 production total run, got #{stats.fetch("totalRuns")}" unless stats.fetch("totalRuns") == 1
     abort "expected exactly 1 production win, got #{stats.fetch("winCount")}" unless stats.fetch("winCount") == 1
+    abort "known actual cost count must be 1" unless stats.fetch("actualCostKnownRunCount") == 1
+    abort "known actual token count must be 1" unless stats.fetch("actualTokensKnownRunCount") == 1
 
     production_route = routes.find { |route| route["taskIntent"] == expected_task && route["model"] == expected_model }
     abort "production route was not surfaced in /routing/stats routes" unless production_route
     abort "production route runCount must be 1" unless production_route["runCount"] == 1
+    abort "production route known actual cost count must be 1" unless production_route["actualCostKnownRunCount"] == 1
 
     leaked_models = routes.map { |route| route["model"].to_s }.grep(/smoke|selected-by-test|synthetic|unknown-cost/)
     abort "non-production route leaked into production stats: #{leaked_models.join(", ")}" unless leaked_models.empty?

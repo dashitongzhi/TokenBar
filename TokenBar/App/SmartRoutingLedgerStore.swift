@@ -1,6 +1,7 @@
 import Foundation
 
-struct SmartRoutingLedgerStore {
+@MainActor
+final class SmartRoutingLedgerStore {
     private let storeURL: URL
     private let maxRecords = 2_000
     private let retentionSeconds: TimeInterval = 90 * 24 * 3600
@@ -36,6 +37,8 @@ struct SmartRoutingLedgerStore {
             actualCostKnown: input.actualCost != nil,
             estimatedTokens: max(input.estimatedTokens ?? 0, 0),
             actualTokens: max(input.actualTokens ?? ((input.inputTokens ?? 0) + (input.outputTokens ?? 0)), 0),
+            estimatedTokensKnown: input.estimatedTokens != nil,
+            actualTokensKnown: input.actualTokens != nil || input.inputTokens != nil || input.outputTokens != nil,
             inputTokens: input.inputTokens.map { max($0, 0) },
             outputTokens: input.outputTokens.map { max($0, 0) },
             requestCount: input.requestCount.map { max($0, 0) },
@@ -74,6 +77,10 @@ struct SmartRoutingLedgerStore {
         let followUpCount = records.filter { $0.followUpRequired || $0.signal == .followUp }.count
         let failedCount = records.filter { $0.signal == .failed }.count
         let unknownCount = records.filter { $0.signal == .unknown }.count
+        let knownEstimatedCostRecords = records.filter(\.hasKnownEstimatedCost)
+        let knownActualCostRecords = records.filter(\.hasKnownActualCost)
+        let knownEstimatedTokenRecords = records.filter(\.hasKnownEstimatedTokens)
+        let knownActualTokenRecords = records.filter(\.hasKnownActualTokens)
 
         return SmartRoutingStatsSnapshot(
             generatedAt: now,
@@ -84,10 +91,14 @@ struct SmartRoutingLedgerStore {
             unknownCount: unknownCount,
             winRate: ratio(winCount, runCount),
             followUpRate: ratio(followUpCount, runCount),
-            estimatedCostTotal: records.reduce(0) { $0 + $1.estimatedCost },
-            actualCostTotal: records.filter(\.hasKnownActualCost).reduce(0) { $0 + $1.actualCost },
-            estimatedTokensTotal: records.reduce(0) { $0 + $1.estimatedTokens },
-            actualTokensTotal: records.reduce(0) { $0 + $1.actualTokens },
+            estimatedCostTotal: knownEstimatedCostRecords.reduce(0) { $0 + $1.estimatedCost },
+            actualCostTotal: knownActualCostRecords.reduce(0) { $0 + $1.actualCost },
+            estimatedCostKnownRunCount: knownEstimatedCostRecords.count,
+            actualCostKnownRunCount: knownActualCostRecords.count,
+            estimatedTokensTotal: knownEstimatedTokenRecords.reduce(0) { $0 + $1.estimatedTokens },
+            actualTokensTotal: knownActualTokenRecords.reduce(0) { $0 + $1.actualTokens },
+            estimatedTokensKnownRunCount: knownEstimatedTokenRecords.count,
+            actualTokensKnownRunCount: knownActualTokenRecords.count,
             excludedNonProductionRuns: allRecords.count - records.count,
             routeStats: routes,
             recentRuns: Array(records.prefix(20))
@@ -138,11 +149,14 @@ struct SmartRoutingLedgerStore {
         let followUpCount = records.filter { $0.followUpRequired || $0.signal == .followUp }.count
         let failedCount = records.filter { $0.signal == .failed }.count
         let unknownCount = records.filter { $0.signal == .unknown }.count
-        let estimatedCost = records.reduce(0) { $0 + $1.estimatedCost }
-        let knownActualCostRecords = records.filter(\ .hasKnownActualCost)
+        let knownEstimatedCostRecords = records.filter(\.hasKnownEstimatedCost)
+        let knownActualCostRecords = records.filter(\.hasKnownActualCost)
+        let knownEstimatedTokenRecords = records.filter(\.hasKnownEstimatedTokens)
+        let knownActualTokenRecords = records.filter(\.hasKnownActualTokens)
+        let estimatedCost = knownEstimatedCostRecords.reduce(0) { $0 + $1.estimatedCost }
         let actualCost = knownActualCostRecords.reduce(0) { $0 + $1.actualCost }
-        let estimatedTokens = records.reduce(0) { $0 + $1.estimatedTokens }
-        let actualTokens = records.reduce(0) { $0 + $1.actualTokens }
+        let estimatedTokens = knownEstimatedTokenRecords.reduce(0) { $0 + $1.estimatedTokens }
+        let actualTokens = knownActualTokenRecords.reduce(0) { $0 + $1.actualTokens }
         let exemplar = records.max { $0.occurredAt < $1.occurredAt }
 
         return SmartRoutingRouteStats(
@@ -159,8 +173,12 @@ struct SmartRoutingLedgerStore {
             followUpRate: ratio(followUpCount, runCount),
             estimatedCostTotal: estimatedCost,
             actualCostTotal: actualCost,
+            estimatedCostKnownRunCount: knownEstimatedCostRecords.count,
+            actualCostKnownRunCount: knownActualCostRecords.count,
             estimatedTokensTotal: estimatedTokens,
             actualTokensTotal: actualTokens,
+            estimatedTokensKnownRunCount: knownEstimatedTokenRecords.count,
+            actualTokensKnownRunCount: knownActualTokenRecords.count,
             averageCostDelta: SmartRoutingCostMetrics.averageCostDelta(
                 observations: records.map {
                     SmartRoutingCostObservation(
@@ -169,7 +187,14 @@ struct SmartRoutingLedgerStore {
                     )
                 }
             ),
-            averageTokenDelta: runCount > 0 ? Double(actualTokens - estimatedTokens) / Double(runCount) : 0,
+            averageTokenDelta: SmartRoutingCostMetrics.averageTokenDelta(
+                observations: records.map {
+                    SmartRoutingTokenObservation(
+                        estimated: $0.hasKnownEstimatedTokens ? $0.estimatedTokens : nil,
+                        actual: $0.hasKnownActualTokens ? $0.actualTokens : nil
+                    )
+                }
+            ),
             lastRunAt: exemplar?.occurredAt ?? .distantPast
         )
     }
@@ -207,5 +232,13 @@ private extension SmartRoutingRunRecord {
 
     var hasKnownActualCost: Bool {
         actualCostKnown == true
+    }
+
+    var hasKnownEstimatedTokens: Bool {
+        estimatedTokensKnown == true
+    }
+
+    var hasKnownActualTokens: Bool {
+        actualTokensKnown == true
     }
 }
