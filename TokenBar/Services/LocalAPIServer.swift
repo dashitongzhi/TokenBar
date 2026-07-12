@@ -43,7 +43,7 @@ final class LocalAPIServer {
         case tooLarge
     }
 
-    private final class ConnectionReadDeadline: @unchecked Sendable {
+    private nonisolated final class ConnectionReadDeadline: @unchecked Sendable {
         private let workItem: DispatchWorkItem
 
         init(connection: NWConnection) {
