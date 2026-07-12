@@ -15,35 +15,35 @@ struct ProviderModelCatalogService {
 
     func fetch(providerID: String, baseURL: String? = nil, now: Date = .now) async -> ProviderModelCatalogResult {
         let provider = providerID.lowercased()
-        let key = await apiKey(for: provider)
 
         do {
+            let baseURL = try Self.validatedBaseURL(providerID: provider, requestedBaseURL: baseURL)
+            let key = await apiKey(for: provider)
             switch provider {
             case "openai":
                 guard let key else { return .unavailable("OpenAI model refresh needs an API key in Keychain or the app environment.") }
-                return .success(try await fetchOpenAICompatible(providerID: provider, baseURL: baseURL ?? "https://api.openai.com/v1", apiKey: key, now: now))
+                return .success(try await fetchOpenAICompatible(providerID: provider, baseURL: baseURL, apiKey: key, now: now))
             case "anthropic":
                 guard let key else { return .unavailable("Anthropic model refresh needs an API key in Keychain or the app environment.") }
-                return .success(try await fetchAnthropic(baseURL: baseURL ?? "https://api.anthropic.com/v1", apiKey: key, now: now))
+                return .success(try await fetchAnthropic(baseURL: baseURL, apiKey: key, now: now))
             case "openrouter":
-                return .success(try await fetchOpenAICompatible(providerID: provider, baseURL: baseURL ?? "https://openrouter.ai/api/v1", apiKey: key, now: now))
+                return .success(try await fetchOpenAICompatible(providerID: provider, baseURL: baseURL, apiKey: key, now: now))
             case "deepseek":
                 guard let key else { return .unavailable("DeepSeek model refresh needs an API key in Keychain, the app environment, or CC Switch config.") }
-                return .success(try await fetchOpenAICompatible(providerID: provider, baseURL: baseURL ?? "https://api.deepseek.com", apiKey: key, now: now))
+                return .success(try await fetchOpenAICompatible(providerID: provider, baseURL: baseURL, apiKey: key, now: now))
             case "mistral":
                 guard let key else { return .unavailable("Mistral model refresh needs an API key in Keychain or the app environment.") }
-                return .success(try await fetchOpenAICompatible(providerID: provider, baseURL: baseURL ?? "https://api.mistral.ai/v1", apiKey: key, now: now))
+                return .success(try await fetchOpenAICompatible(providerID: provider, baseURL: baseURL, apiKey: key, now: now))
             case "google":
                 guard let key else { return .unavailable("Gemini model refresh needs an API key in Keychain or the app environment.") }
-                return .success(try await fetchGemini(baseURL: baseURL ?? "https://generativelanguage.googleapis.com/v1beta", apiKey: key, now: now))
+                return .success(try await fetchGemini(baseURL: baseURL, apiKey: key, now: now))
             case "minimax":
                 guard let key else { return .unavailable("MiniMax model refresh needs an API key in Keychain, the app environment, or CC Switch config.") }
-                return .success(try await fetchOpenAICompatible(providerID: provider, baseURL: baseURL ?? "https://api.minimax.io/v1", apiKey: key, now: now))
-            default:
-                guard let baseURL, baseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
-                    return .unavailable("Add a Base URL to pull models for this provider.")
-                }
                 return .success(try await fetchOpenAICompatible(providerID: provider, baseURL: baseURL, apiKey: key, now: now))
+            case "custom":
+                return .success(try await fetchOpenAICompatible(providerID: provider, baseURL: baseURL, apiKey: key, now: now))
+            default:
+                return .unavailable("Model refresh is only available for supported providers.")
             }
         } catch let error as ModelCatalogError {
             return .failure(error.localizedDescription)
@@ -51,6 +51,53 @@ struct ProviderModelCatalogService {
             return .failure("Model refresh failed: \(error.localizedDescription)")
         }
     }
+
+    static func validatedBaseURL(providerID: String, requestedBaseURL: String?) throws -> String {
+        let provider = providerID.lowercased()
+        let defaults = [
+            "openai": "https://api.openai.com/v1",
+            "anthropic": "https://api.anthropic.com/v1",
+            "openrouter": "https://openrouter.ai/api/v1",
+            "deepseek": "https://api.deepseek.com",
+            "mistral": "https://api.mistral.ai/v1",
+            "google": "https://generativelanguage.googleapis.com/v1beta",
+            "minimax": "https://api.minimax.io/v1"
+        ]
+
+        guard let requestedBaseURL, requestedBaseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+            guard let defaultBaseURL = defaults[provider] else {
+                throw ModelCatalogError.baseURLRequired
+            }
+            return defaultBaseURL
+        }
+
+        let normalized = requestedBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let components = URLComponents(string: normalized),
+              components.scheme?.lowercased() == "https",
+              let host = components.host?.lowercased(),
+              components.user == nil,
+              components.password == nil,
+              components.port == nil,
+              components.query == nil,
+              components.fragment == nil else {
+            throw ModelCatalogError.untrustedBaseURL
+        }
+
+        if let expectedHost = Self.officialHosts[provider], host != expectedHost {
+            throw ModelCatalogError.untrustedBaseURL
+        }
+        return normalized
+    }
+
+    private static let officialHosts = [
+        "openai": "api.openai.com",
+        "anthropic": "api.anthropic.com",
+        "openrouter": "openrouter.ai",
+        "deepseek": "api.deepseek.com",
+        "mistral": "api.mistral.ai",
+        "google": "generativelanguage.googleapis.com",
+        "minimax": "api.minimax.io"
+    ]
 
     private func fetchOpenAICompatible(providerID: String, baseURL: String, apiKey: String?, now: Date) async throws -> [ModelCatalogItem] {
         let url = try modelsURL(baseURL: baseURL)
@@ -162,6 +209,8 @@ private enum ModelCatalogError: LocalizedError {
     case invalidURL
     case invalidResponse
     case httpStatus(Int, String)
+    case baseURLRequired
+    case untrustedBaseURL
 
     var errorDescription: String? {
         switch self {
@@ -171,6 +220,10 @@ private enum ModelCatalogError: LocalizedError {
             "Model refresh failed: invalid HTTP response."
         case .httpStatus(let status, let message):
             "Model refresh failed with HTTP \(status): \(message)"
+        case .baseURLRequired:
+            "Add a Base URL to pull models for this provider."
+        case .untrustedBaseURL:
+            "Model refresh refused: provider credentials may only be sent to the provider's official HTTPS endpoint."
         }
     }
 }
