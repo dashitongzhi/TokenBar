@@ -13,7 +13,10 @@ require "yaml"
 
 module TokenBarCLI
   DEFAULT_API_URL = "http://127.0.0.1:3847"
-  LOCAL_API_TOKEN_PATH = Pathname.new("~/Library/Application Support/TokenBar/local-api-token").expand_path.freeze
+  LOCAL_API_TOKEN_PATHS = [
+    Pathname.new("~/Library/Containers/Kral.TokenBar/Data/Library/Application Support/TokenBar/local-api-token").expand_path,
+    Pathname.new("~/Library/Application Support/TokenBar/local-api-token").expand_path
+  ].freeze
   CONFIG_NAMES = %w[tokenbar.yml tokenbar.yaml].freeze
   EXIT_BY_STATUS = { "allow" => 0, "warn" => 1, "block" => 2 }.freeze
   AGENT_DISPLAY = {
@@ -591,16 +594,14 @@ module TokenBarCLI
 
   def post_json(api_url, path, input)
     uri = endpoint(api_url, path)
-    if curl_available?
-      body = curl_request(["-X", "POST", "-H", "Content-Type: application/json", *auth_curl_headers, "--data", JSON.generate(input), uri.to_s])
-      return body ? JSON.parse(body) : nil
+    body = JSON.generate(input)
+    response = with_api_token do |token|
+      request = Net::HTTP::Post.new(uri)
+      request["Content-Type"] = "application/json"
+      apply_auth_token(request, token)
+      request.body = body
+      http_request(uri, request)
     end
-
-    request = Net::HTTP::Post.new(uri)
-    request["Content-Type"] = "application/json"
-    apply_auth_header(request)
-    request.body = JSON.generate(input)
-    response = http_request(uri, request)
     return nil unless response&.is_a?(Net::HTTPSuccess)
 
     JSON.parse(response.body)
@@ -610,44 +611,15 @@ module TokenBarCLI
 
   def http_get(api_url, path)
     uri = endpoint(api_url, path)
-    if curl_available?
-      body = curl_request([*auth_curl_headers, uri.to_s])
-      return body ? JSON.parse(body) : nil
+    response = with_api_token do |token|
+      request = Net::HTTP::Get.new(uri)
+      apply_auth_token(request, token)
+      http_request(uri, request)
     end
-
-    request = Net::HTTP::Get.new(uri)
-    apply_auth_header(request)
-    response = http_request(uri, request)
     return nil unless response&.is_a?(Net::HTTPSuccess)
 
     JSON.parse(response.body)
   rescue JSON::ParserError
-    nil
-  end
-
-  def curl_available?
-    @curl_available = system("command -v curl >/dev/null 2>&1") if @curl_available.nil?
-    @curl_available
-  end
-
-  def curl_request(args)
-    @last_api_error = nil
-    stdout, _stderr, status = Open3.capture3("curl", "-sS", "--max-time", "2", "-w", "\n%{http_code}", *args)
-    unless status.success?
-      @last_api_error = "connection_failed"
-      return nil
-    end
-
-    body, separator, code = stdout.rpartition("\n")
-    unless separator && code.match?(/\A\d{3}\z/)
-      @last_api_error = "invalid_response"
-      return nil
-    end
-
-    http_status = code.to_i
-    return body if http_status.between?(200, 299)
-
-    @last_api_error = "http_#{http_status}"
     nil
   end
 
@@ -663,32 +635,46 @@ module TokenBarCLI
     nil
   end
 
-  def auth_curl_headers
-    token = api_token
-    return [] if blank?(token)
-
-    ["-H", "Authorization: Bearer #{token}"]
+  def with_api_token
+    response = nil
+    api_tokens.each do |token|
+      response = yield(token)
+      return response unless response&.code == "401"
+    end
+    response
   end
 
-  def apply_auth_header(request)
-    token = api_token
+  def apply_auth_token(request, token)
     request["Authorization"] = "Bearer #{token}" unless blank?(token)
   end
 
-  def api_token
+  def api_tokens
+    tokens = []
     env_token = ENV["TOKENBAR_API_TOKEN"]
-    return env_token.strip unless blank?(env_token)
-    return nil unless LOCAL_API_TOKEN_PATH.file?
+    tokens << env_token.strip unless blank?(env_token)
+    api_token_paths.each do |path|
+      next unless path.file?
 
-    LOCAL_API_TOKEN_PATH.read.strip
-  rescue SystemCallError
-    nil
+      token = path.read.strip
+      tokens << token unless blank?(token)
+    rescue SystemCallError
+      next
+    end
+    tokens = tokens.uniq
+    tokens.empty? ? [nil] : tokens
+  end
+
+  def api_token_paths
+    explicit = ENV["TOKENBAR_API_TOKEN_PATH"]
+    paths = []
+    paths << Pathname.new(explicit).expand_path unless blank?(explicit)
+    (paths + LOCAL_API_TOKEN_PATHS).uniq
   end
 
   def api_failure_message(action)
     case @last_api_error
     when "http_401"
-      "TokenBar local API rejected the request; set TOKENBAR_API_TOKEN or start the current TokenBar app so #{LOCAL_API_TOKEN_PATH} is available"
+      "TokenBar local API rejected the request; set TOKENBAR_API_TOKEN or TOKENBAR_API_TOKEN_PATH, or start TokenBar so one of these token paths is available: #{LOCAL_API_TOKEN_PATHS.join(", ")}"
     when "http_403"
       "TokenBar local API rejected the request origin or authorization; #{action}"
     when "http_400"

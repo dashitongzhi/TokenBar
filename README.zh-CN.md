@@ -174,7 +174,7 @@ TokenBar 目前主要面向本地开发构建和本地 DMG 验证。如果你安
 TokenBar 只读取已启用功能所需的本机状态：
 
 - 供应商 Key 从环境变量或 macOS Keychain 读取。
-- 本地 API token 保存在 `~/Library/Application Support/TokenBar/`。
+- 本地 API token 保存在 TokenBar 的 Sandbox container 中；CLI 会自动识别正式包 container 路径和旧的本地开发路径。
 - Codex transcript ingestion 只读取你通过 CLI 或 hook 传入的 transcript 文件。
 - Claude Code usage ingestion 只读取 hook 发送的 statusline 字段。
 - CC Switch usage 读取本地代理状态和 rollups，但不会把 CC Switch keys 导入 TokenBar。
@@ -282,15 +282,15 @@ setup:
 app 会在这里创建 token：
 
 ```text
-~/Library/Application Support/TokenBar/local-api-token
+~/Library/Containers/Kral.TokenBar/Data/Library/Application Support/TokenBar/local-api-token
 ```
 
-token 文件使用仅当前用户可读写的权限，CLI 会自动读取它。浏览器 CORS 响应被限制为 localhost 来源。TokenBar 不会输出 `Access-Control-Allow-Origin: *`。
+token 文件使用仅当前用户可读写的权限，CLI 会自动从 Sandbox container（或旧本地开发路径）读取它。浏览器 CORS 响应被限制为 localhost 来源。TokenBar 不会输出 `Access-Control-Allow-Origin: *`。
 
 ```bash
 curl http://127.0.0.1:3847/health
 
-TOKENBAR_API_TOKEN="$(cat "$HOME/Library/Application Support/TokenBar/local-api-token")"
+TOKENBAR_API_TOKEN="$(cat "$HOME/Library/Containers/Kral.TokenBar/Data/Library/Application Support/TokenBar/local-api-token")"
 
 curl http://127.0.0.1:3847/policy \
   -H "Authorization: Bearer $TOKENBAR_API_TOKEN"

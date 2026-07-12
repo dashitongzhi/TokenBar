@@ -2,7 +2,8 @@
 set -euo pipefail
 
 API_URL="${TOKENBAR_API_URL:-http://127.0.0.1:3847}"
-TOKEN_PATH="${TOKENBAR_API_TOKEN_PATH:-$HOME/Library/Application Support/TokenBar/local-api-token}"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/local_api_state.sh"
+TOKEN_PATH="$(tokenbar_api_token_path)" || TOKEN_PATH=""
 PROVIDER_ID="${TOKENBAR_LOCAL_API_SMOKE_PROVIDER:-openai}"
 
 fail() {

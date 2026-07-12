@@ -280,6 +280,8 @@ case "$MODE" in
     enable_local_api_for_verify
     open_verify_app
     verify_app
+    export TOKENBAR_API_TOKEN_PATH="$HOME/Library/Application Support/TokenBar/local-api-token"
+    export TOKENBAR_WORKSPACE_POLICY_STORE="$HOME/Library/Application Support/TokenBar/workspace-policies.json"
     stage "Running authenticated local API contract smoke"
     "$ROOT_DIR/script/smoke_local_api_contract.sh"
     stage "Running local API routing stats smoke"

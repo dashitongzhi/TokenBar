@@ -174,7 +174,7 @@ TokenBar is currently intended for local development builds and local DMG valida
 TokenBar reads only the local state needed for the features you enable:
 
 - Provider keys are read from environment variables or the macOS Keychain.
-- The local API token is stored under `~/Library/Application Support/TokenBar/`.
+- The local API token is stored in TokenBar's sandbox container. The CLI automatically detects both the release container path and the legacy local-development path.
 - Codex transcript ingestion reads the transcript file you pass to the CLI or hook.
 - Claude Code usage ingestion reads the statusline fields sent by the hook.
 - CC Switch usage reads local proxy state and rollups without importing CC Switch keys into TokenBar.
@@ -282,15 +282,15 @@ The local API binds to loopback only. `GET /health` is intentionally unauthentic
 The app creates the token at:
 
 ```text
-~/Library/Application Support/TokenBar/local-api-token
+~/Library/Containers/Kral.TokenBar/Data/Library/Application Support/TokenBar/local-api-token
 ```
 
-The token file is written with user-only permissions, and the CLI reads it automatically. Browser CORS responses are restricted to localhost origins. TokenBar does not emit `Access-Control-Allow-Origin: *`.
+The token file is written with user-only permissions, and the CLI reads it automatically from the sandbox container (or the legacy development path when present). Browser CORS responses are restricted to localhost origins. TokenBar does not emit `Access-Control-Allow-Origin: *`.
 
 ```bash
 curl http://127.0.0.1:3847/health
 
-TOKENBAR_API_TOKEN="$(cat "$HOME/Library/Application Support/TokenBar/local-api-token")"
+TOKENBAR_API_TOKEN="$(cat "$HOME/Library/Containers/Kral.TokenBar/Data/Library/Application Support/TokenBar/local-api-token")"
 
 curl http://127.0.0.1:3847/policy \
   -H "Authorization: Bearer $TOKENBAR_API_TOKEN"
