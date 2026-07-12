@@ -256,6 +256,11 @@ budgets:
   spend_today: 0.00
   spend_month: 0.00
 
+rules:
+  # 0 disables the raw-token rule. Set a positive value to block a run whose
+  # estimated tokens are above this cap.
+  max_estimated_tokens: 0
+
 providers:
   allowed:
     - openai
@@ -359,15 +364,14 @@ Codex's preflight hook estimates a run by default from the submitted prompt and 
 TOKENBAR_BIN=/absolute/path/to/tokenbar
 TOKENBAR_PROVIDER=anthropic
 TOKENBAR_MODEL=claude-sonnet
-TOKENBAR_KEY_SOURCE=company_managed
 TOKENBAR_ESTIMATED_COST=0.25
 TOKENBAR_ESTIMATED_TOKENS=20000
 TOKENBAR_INTENT=refactor
 ```
 
-For Codex `UserPromptSubmit`, `TOKENBAR_PROVIDER`, `TOKENBAR_MODEL`, `TOKENBAR_ESTIMATED_COST`, and `TOKENBAR_ESTIMATED_TOKENS` are optional. When Codex supplies a prompt but not an estimate, the hook pipes the JSON payload to `tokenbar check --codex-hook-json`; the CLI estimates prompt tokens and likely run cost, marks the key source as `codex_managed`, and then evaluates normal workspace policy. Set `TOKENBAR_KEY_SOURCE=personal` or pass `--key-source personal` when you intentionally want a company-key workspace to reject an OpenAI run using a personal/env key.
+For Codex `UserPromptSubmit`, `TOKENBAR_PROVIDER`, `TOKENBAR_MODEL`, `TOKENBAR_ESTIMATED_COST`, and `TOKENBAR_ESTIMATED_TOKENS` are optional. When Codex supplies a prompt but not an estimate, the hook pipes the JSON payload to `tokenbar check --codex-hook-json`; the CLI estimates prompt tokens and likely run cost before evaluating normal workspace policy. `require_company_key` does not trust `TOKENBAR_KEY_SOURCE` or `--key-source`: the running TokenBar app must find an OpenAI organization credential in its Keychain. When the app is unavailable, the offline fallback blocks instead of trusting a self-reported provenance.
 
-This means expensive Codex prompts can be stopped before they run: if the estimated prompt/run tokens imply a cost above `budgets.max_run`, or push projected daily spend past the workspace budget, `UserPromptSubmit` returns a Codex block decision. TokenBar's default gate is cost-policy based, not a standalone raw-token ceiling; add an explicit policy rule if a workspace needs to block every run above a fixed token count.
+This means expensive Codex prompts can be stopped before they run: if the estimated prompt/run tokens imply a cost above `budgets.max_run`, exceed `rules.max_estimated_tokens`, or push projected daily/monthly spend past the workspace budget, `UserPromptSubmit` returns a Codex block decision. Set `rules.max_estimated_tokens` to `0` to disable the raw-token rule.
 
 Users do not need to edit `tokenbar.yml` to tune the live threshold. Open TokenBar's Workspaces view and adjust each workspace's Per-run cap with the amount field and +/- controls; the value is stored locally and used by the running localhost policy API. `tokenbar.yml` remains the offline fallback when the app API is unavailable.
 

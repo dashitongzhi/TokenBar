@@ -791,11 +791,20 @@ final class AppState: ObservableObject {
     }
 
     func policyDecisionJSON(input: PolicyEvaluationInput) -> Data {
+        var verifiedInput = input
+        verifiedInput.keySource = verifiedKeySource(for: input)
         normalizeWorkspaceSpendBuckets()
-        let transientWorkspacePolicies = workspacePoliciesForPolicyEvaluation(input)
-        let decision = evaluatePolicy(input: input, shouldRecord: false, workspacePolicies: transientWorkspacePolicies)
+        let transientWorkspacePolicies = workspacePoliciesForPolicyEvaluation(verifiedInput)
+        let decision = evaluatePolicy(input: verifiedInput, shouldRecord: false, workspacePolicies: transientWorkspacePolicies)
         currentDecision = decision
         return LocalAPIPayloadBuilder.policyDecisionJSON(decision)
+    }
+
+    private func verifiedKeySource(for input: PolicyEvaluationInput) -> String? {
+        guard input.providerID == "openai", KeychainService.hasStoredOpenAIAdminCredential() else {
+            return nil
+        }
+        return "tokenbar_keychain"
     }
 
     func ingestLocalAgentUsageJSON(input: LocalAgentUsageIngest) -> Data {
@@ -1421,6 +1430,7 @@ final class AppState: ObservableObject {
             workspacePolicies[index].dailyBudget = input.dailyBudget ?? workspacePolicies[index].dailyBudget
             workspacePolicies[index].monthlyBudget = input.monthlyBudget ?? workspacePolicies[index].monthlyBudget
             workspacePolicies[index].maxEstimatedRunCost = input.maxEstimatedRunCost ?? workspacePolicies[index].maxEstimatedRunCost
+            workspacePolicies[index].maxEstimatedTokens = input.maxEstimatedTokens ?? workspacePolicies[index].maxEstimatedTokens
             workspacePolicies[index].allowedProviderIDs = input.allowedProviderIDs ?? workspacePolicies[index].allowedProviderIDs
             workspacePolicies[index].blockedModels = input.blockedModels ?? workspacePolicies[index].blockedModels
             workspacePolicies[index].requireCompanyKey = input.requireCompanyKey ?? workspacePolicies[index].requireCompanyKey
@@ -1443,6 +1453,7 @@ final class AppState: ObservableObject {
                 allowedProviderIDs: input.allowedProviderIDs ?? allowedProviderIDs,
                 blockedModels: input.blockedModels ?? [],
                 maxEstimatedRunCost: input.maxEstimatedRunCost ?? 0,
+                maxEstimatedTokens: input.maxEstimatedTokens ?? 0,
                 requireCompanyKey: input.requireCompanyKey ?? false,
                 preferredProviderID: providerID,
                 preferredModel: normalizedModel(input.model, providerID: providerID),
@@ -1468,6 +1479,7 @@ final class AppState: ObservableObject {
             evaluationWorkspacePolicies[index].dailyBudget = input.dailyBudget ?? evaluationWorkspacePolicies[index].dailyBudget
             evaluationWorkspacePolicies[index].monthlyBudget = input.monthlyBudget ?? evaluationWorkspacePolicies[index].monthlyBudget
             evaluationWorkspacePolicies[index].maxEstimatedRunCost = input.maxEstimatedRunCost ?? evaluationWorkspacePolicies[index].maxEstimatedRunCost
+            evaluationWorkspacePolicies[index].maxEstimatedTokens = input.maxEstimatedTokens ?? evaluationWorkspacePolicies[index].maxEstimatedTokens
             evaluationWorkspacePolicies[index].allowedProviderIDs = input.allowedProviderIDs ?? evaluationWorkspacePolicies[index].allowedProviderIDs
             evaluationWorkspacePolicies[index].blockedModels = input.blockedModels ?? evaluationWorkspacePolicies[index].blockedModels
             evaluationWorkspacePolicies[index].requireCompanyKey = input.requireCompanyKey ?? evaluationWorkspacePolicies[index].requireCompanyKey
@@ -1487,6 +1499,7 @@ final class AppState: ObservableObject {
                 allowedProviderIDs: input.allowedProviderIDs ?? [input.providerID],
                 blockedModels: input.blockedModels ?? [],
                 maxEstimatedRunCost: input.maxEstimatedRunCost ?? 0,
+                maxEstimatedTokens: input.maxEstimatedTokens ?? 0,
                 requireCompanyKey: input.requireCompanyKey ?? false,
                 preferredProviderID: input.preferredProviderID ?? input.providerID,
                 preferredModel: input.preferredModel ?? input.model,
@@ -1767,6 +1780,7 @@ final class AppState: ObservableObject {
             dailyBudget: nil,
             monthlyBudget: nil,
             maxEstimatedRunCost: nil,
+            maxEstimatedTokens: nil,
             allowedProviderIDs: nil,
             blockedModels: nil,
             requireCompanyKey: nil,
@@ -2026,6 +2040,28 @@ final class AppState: ObservableObject {
               alreadyAppliedDecision.projectedMonthlySpend == 19 else {
             throw WorkspaceBudgetPeriodsSmokeFailure("Applied local usage was counted again during policy evaluation.")
         }
+
+        workspace.maxEstimatedTokens = 100
+        let tokenCapDecision = PolicyEngine.evaluate(
+            input: PolicyEvaluationInput(
+                agent: .codex,
+                workspaceID: workspace.id,
+                providerID: "openai",
+                model: "gpt-5",
+                estimatedCost: 0,
+                estimatedTokens: 101,
+                intent: "token-cap-smoke"
+            ),
+            workspaces: [workspace],
+            selectedWorkspace: workspace,
+            providers: [],
+            projectedSessionSpend: 0,
+            sessionBudget: 0
+        )
+        guard tokenCapDecision.status == .block,
+              tokenCapDecision.reasons.contains("Estimated run tokens are above the workspace token cap.") else {
+            throw WorkspaceBudgetPeriodsSmokeFailure("Workspace raw-token cap was not enforced.")
+        }
     }
 
     private func smokeDate(year: Int, month: Int, day: Int, calendar: Calendar) throws -> Date {
@@ -2076,6 +2112,7 @@ private extension PolicyEvaluationInput {
             dailyBudget != nil ||
             monthlyBudget != nil ||
             maxEstimatedRunCost != nil ||
+            maxEstimatedTokens != nil ||
             requireCompanyKey != nil ||
             workspaceName != nil ||
             workspacePath != nil ||

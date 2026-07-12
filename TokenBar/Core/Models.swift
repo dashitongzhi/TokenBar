@@ -629,6 +629,7 @@ struct LocalAgentUsageIngest: Codable, Equatable {
     var dailyBudget: Double?
     var monthlyBudget: Double?
     var maxEstimatedRunCost: Double?
+    var maxEstimatedTokens: Int?
     var allowedProviderIDs: [String]?
     var blockedModels: [String]?
     var requireCompanyKey: Bool?
@@ -914,6 +915,7 @@ struct WorkspacePolicy: Identifiable, Codable, Equatable {
     var allowedProviderIDs: [String]
     var blockedModels: [String]
     var maxEstimatedRunCost: Double
+    var maxEstimatedTokens: Int = 0
     var requireCompanyKey: Bool
     var preferredProviderID: String? = nil
     var preferredModel: String? = nil
@@ -985,6 +987,7 @@ struct PolicyEvaluationInput: Codable, Equatable {
     var dailyBudget: Double? = nil
     var monthlyBudget: Double? = nil
     var maxEstimatedRunCost: Double? = nil
+    var maxEstimatedTokens: Int? = nil
     var allowedProviderIDs: [String]? = nil
     var blockedModels: [String]? = nil
     var requireCompanyKey: Bool? = nil

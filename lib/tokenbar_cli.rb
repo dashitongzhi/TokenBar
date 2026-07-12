@@ -229,6 +229,7 @@ module TokenBarCLI
       daily_budget: 8.00,
       monthly_budget: 160.00,
       max_run: inferred[:max_run],
+      max_estimated_tokens: 0,
       spend_today: 0.00,
       spend_month: 0.00,
       allowed_providers: inferred[:allowed_providers],
@@ -250,6 +251,7 @@ module TokenBarCLI
       opts.on("--daily-budget USD", Float, "Daily budget in USD (default: 8.00)") { |value| init_options[:daily_budget] = value }
       opts.on("--monthly-budget USD", Float, "Monthly budget in USD (default: 160.00)") { |value| init_options[:monthly_budget] = value }
       opts.on("--max-run-cost USD", Float, "Per-run cost cap in USD (default: inferred from local agent config)") { |value| init_options[:max_run] = value }
+      opts.on("--max-estimated-tokens TOKENS", Integer, "Block a run above this estimated token count (0 disables the cap)") { |value| init_options[:max_estimated_tokens] = value }
       opts.on("--allowed-providers LIST", "Comma-separated providers (default: inferred from local agent config)") { |value| init_options[:allowed_providers] = split_list(value) }
       opts.on("--preferred-provider PROVIDER", "Preferred provider (default: inferred from local agent config)") { |value| init_options[:preferred_provider] = value }
       opts.on("--default-model MODEL", "Default model written to models.default (default: inferred from local agent config)") { |value| init_options[:default_model] = value }
@@ -944,6 +946,7 @@ module TokenBarCLI
     raise Error, "--daily-budget must be >= 0" if options[:daily_budget].negative?
     raise Error, "--monthly-budget must be >= 0" if options[:monthly_budget].negative?
     raise Error, "--max-run-cost must be > 0" unless options[:max_run].positive?
+    raise Error, "--max-estimated-tokens must be >= 0" if options[:max_estimated_tokens].negative?
     raise Error, "--allowed-providers cannot be empty" if options[:allowed_providers].empty?
     raise Error, "--default-model cannot be empty" if blank?(options[:default_model])
     unless options[:allowed_providers].include?(options[:preferred_provider])
@@ -967,6 +970,9 @@ module TokenBarCLI
       "  max_run: #{money(options[:max_run])}",
       "  spend_today: #{money(options[:spend_today])}",
       "  spend_month: #{money(options[:spend_month])}",
+      "",
+      "rules:",
+      "  max_estimated_tokens: #{options[:max_estimated_tokens]}",
       "",
       "providers:",
       "  allowed:",
@@ -1143,6 +1149,7 @@ module TokenBarCLI
     input["dailyBudget"] = workspace["dailyBudget"]
     input["monthlyBudget"] = workspace["monthlyBudget"]
     input["maxEstimatedRunCost"] = workspace["maxEstimatedRunCost"]
+    input["maxEstimatedTokens"] = workspace["maxEstimatedTokens"]
     input["allowedProviderIDs"] = workspace["allowedProviderIDs"]
     input["blockedModels"] = workspace["blockedModels"]
     input["requireCompanyKey"] = workspace["requireCompanyKey"]
@@ -1628,9 +1635,14 @@ module TokenBarCLI
       reasons << "Estimated run cost is above the per-run cap."
     end
 
-    if workspace["requireCompanyKey"] && company_key_required_but_unsatisfied?(input)
+    if workspace["maxEstimatedTokens"].to_i.positive? && input["estimatedTokens"].to_i > workspace["maxEstimatedTokens"].to_i
       status = "block"
-      reasons << "Workspace requires a company-managed key."
+      reasons << "Estimated run tokens are above the workspace token cap."
+    end
+
+    if workspace["requireCompanyKey"]
+      status = "block"
+      reasons << "Offline policy cannot verify a company-managed key; start the TokenBar app with a stored OpenAI organization credential."
     end
 
     daily_budget = workspace["dailyBudget"].to_f
@@ -1697,6 +1709,7 @@ module TokenBarCLI
     budgets = config.fetch("budgets", {})
     providers = config.fetch("providers", {})
     models = config.fetch("models", {})
+    rules = config.fetch("rules", {})
 
     {
       "id" => workspace["id"] || workspace_id,
@@ -1710,6 +1723,7 @@ module TokenBarCLI
       "allowedProviderIDs" => Array(providers["allowed"]).map(&:to_s),
       "blockedModels" => Array(models["blocked"]).map(&:to_s),
       "maxEstimatedRunCost" => numeric_config(budgets["max_run"] || budgets["maxEstimatedRunCost"], Float::INFINITY),
+      "maxEstimatedTokens" => integer_config(rules["max_estimated_tokens"] || rules["maxEstimatedTokens"], 0),
       "requireCompanyKey" => providers["require_company_key"] == true || providers["requireCompanyKey"] == true,
       "preferredProviderID" => providers["preferred"],
       "preferredModel" => models["default"]
@@ -1734,6 +1748,7 @@ module TokenBarCLI
     budgets = config.fetch("budgets", {})
     providers = config.fetch("providers", {})
     models = config.fetch("models", {})
+    rules = config.fetch("rules", {})
     {
       "path" => config["path"],
       "workspace" => {
@@ -1750,7 +1765,8 @@ module TokenBarCLI
       "models" => {
         "default" => models["default"],
         "blocked" => models["blocked"]
-      }
+      },
+      "rules" => rules.slice("max_estimated_tokens", "maxEstimatedTokens")
     }
   end
 
@@ -1909,6 +1925,14 @@ module TokenBarCLI
 
     Integer(value)
   rescue ArgumentError
+    fallback
+  end
+
+  def integer_config(value, fallback)
+    return fallback if value.nil?
+
+    Integer(value)
+  rescue ArgumentError, TypeError
     fallback
   end
 

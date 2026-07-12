@@ -48,6 +48,11 @@ struct PolicyEngine {
             reasons.append("Estimated run cost is above the per-run cap.")
         }
 
+        if workspace.maxEstimatedTokens > 0 && input.estimatedTokens > workspace.maxEstimatedTokens {
+            status = .block
+            reasons.append("Estimated run tokens are above the workspace token cap.")
+        }
+
         if workspace.requireCompanyKey && companyKeyRequiredButUnsatisfied(input) {
             status = .block
             reasons.append("Workspace requires a company-managed key.")

@@ -19,6 +19,7 @@ enum LocalAPIPayloadBuilder {
                     "spendDayKey": workspace.spendDayKey ?? NSNull(),
                     "spendMonthKey": workspace.spendMonthKey ?? NSNull(),
                     "maxEstimatedRunCost": workspace.maxEstimatedRunCost,
+                    "maxEstimatedTokens": workspace.maxEstimatedTokens,
                     "allowedProviders": workspace.allowedProviderIDs,
                     "preferredProvider": workspace.preferredProviderID ?? NSNull(),
                     "preferredModel": workspace.preferredModel ?? NSNull(),
