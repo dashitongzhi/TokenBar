@@ -13,7 +13,7 @@ struct SmartRoutingLedgerStore {
     }
 
     func record(_ input: SmartRoutingRunInput, fallbackWorkspaceID: String?, fallbackAgent: AgentProvider, now: Date = .now) -> SmartRoutingRunRecord {
-        let record = SmartRoutingRunRecord(
+        var record = SmartRoutingRunRecord(
             id: UUID(),
             recordedAt: now,
             occurredAt: input.occurredAt ?? now,
@@ -28,6 +28,8 @@ struct SmartRoutingLedgerStore {
             taskID: Self.blankToNil(input.taskID),
             estimatedCost: max(input.estimatedCost ?? 0, 0),
             actualCost: max(input.actualCost ?? 0, 0),
+            estimatedCostKnown: input.estimatedCost != nil,
+            actualCostKnown: input.actualCost != nil,
             estimatedTokens: max(input.estimatedTokens ?? 0, 0),
             actualTokens: max(input.actualTokens ?? ((input.inputTokens ?? 0) + (input.outputTokens ?? 0)), 0),
             inputTokens: input.inputTokens.map { max($0, 0) },
@@ -41,7 +43,12 @@ struct SmartRoutingLedgerStore {
             metadata: (input.metadata ?? [:]).filter { $0.key.isEmpty == false && $0.value.isEmpty == false }
         )
         var records = load()
-        records.append(record)
+        if let existingIndex = records.firstIndex(where: { Self.isSameRun($0, record) }) {
+            record.id = records[existingIndex].id
+            records[existingIndex] = record
+        } else {
+            records.append(record)
+        }
         save(pruned(records, now: now))
         return record
     }
@@ -74,7 +81,7 @@ struct SmartRoutingLedgerStore {
             winRate: ratio(winCount, runCount),
             followUpRate: ratio(followUpCount, runCount),
             estimatedCostTotal: records.reduce(0) { $0 + $1.estimatedCost },
-            actualCostTotal: records.reduce(0) { $0 + $1.actualCost },
+            actualCostTotal: records.filter(\.hasKnownActualCost).reduce(0) { $0 + $1.actualCost },
             estimatedTokensTotal: records.reduce(0) { $0 + $1.estimatedTokens },
             actualTokensTotal: records.reduce(0) { $0 + $1.actualTokens },
             excludedNonProductionRuns: allRecords.count - records.count,
@@ -128,7 +135,8 @@ struct SmartRoutingLedgerStore {
         let failedCount = records.filter { $0.signal == .failed }.count
         let unknownCount = records.filter { $0.signal == .unknown }.count
         let estimatedCost = records.reduce(0) { $0 + $1.estimatedCost }
-        let actualCost = records.reduce(0) { $0 + $1.actualCost }
+        let knownActualCostRecords = records.filter(\ .hasKnownActualCost)
+        let actualCost = knownActualCostRecords.reduce(0) { $0 + $1.actualCost }
         let estimatedTokens = records.reduce(0) { $0 + $1.estimatedTokens }
         let actualTokens = records.reduce(0) { $0 + $1.actualTokens }
         let exemplar = records.max { $0.occurredAt < $1.occurredAt }
@@ -149,7 +157,7 @@ struct SmartRoutingLedgerStore {
             actualCostTotal: actualCost,
             estimatedTokensTotal: estimatedTokens,
             actualTokensTotal: actualTokens,
-            averageCostDelta: runCount > 0 ? (actualCost - estimatedCost) / Double(runCount) : 0,
+            averageCostDelta: knownActualCostRecords.isEmpty == false ? (actualCost - estimatedCost) / Double(knownActualCostRecords.count) : 0,
             averageTokenDelta: runCount > 0 ? Double(actualTokens - estimatedTokens) / Double(runCount) : 0,
             lastRunAt: exemplar?.occurredAt ?? .distantPast
         )
@@ -157,6 +165,17 @@ struct SmartRoutingLedgerStore {
 
     private static func normalized(_ value: String?, fallback: String) -> String {
         blankToNil(value) ?? fallback
+    }
+
+    private nonisolated static func isSameRun(_ lhs: SmartRoutingRunRecord, _ rhs: SmartRoutingRunRecord) -> Bool {
+        if let taskID = lhs.taskID, taskID == rhs.taskID, lhs.workspaceID == rhs.workspaceID {
+            return true
+        }
+        guard let sessionID = lhs.sessionID, sessionID == rhs.sessionID else { return false }
+        return lhs.workspaceID == rhs.workspaceID &&
+            lhs.taskIntent == rhs.taskIntent &&
+            lhs.providerID == rhs.providerID &&
+            lhs.model.caseInsensitiveCompare(rhs.model) == .orderedSame
     }
 
     private static func blankToNil(_ value: String?) -> String? {
@@ -167,5 +186,11 @@ struct SmartRoutingLedgerStore {
     private func ratio(_ numerator: Int, _ denominator: Int) -> Double {
         guard denominator > 0 else { return 0 }
         return Double(numerator) / Double(denominator)
+    }
+}
+
+private extension SmartRoutingRunRecord {
+    var hasKnownActualCost: Bool {
+        actualCostKnown == true
     }
 }

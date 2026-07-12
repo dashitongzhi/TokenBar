@@ -745,6 +745,8 @@ struct SmartRoutingRunRecord: Identifiable, Codable, Equatable {
     var taskID: String?
     var estimatedCost: Double
     var actualCost: Double
+    var estimatedCostKnown: Bool? = nil
+    var actualCostKnown: Bool? = nil
     var estimatedTokens: Int
     var actualTokens: Int
     var inputTokens: Int?

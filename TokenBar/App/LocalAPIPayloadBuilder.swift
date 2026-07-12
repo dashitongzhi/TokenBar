@@ -249,9 +249,11 @@ enum LocalAPIPayloadBuilder {
             "workspacePath": record.workspacePath ?? NSNull(),
             "sessionID": record.sessionID ?? NSNull(),
             "taskID": record.taskID ?? NSNull(),
-            "estimatedCost": record.estimatedCost,
-            "actualCost": record.actualCost,
-            "costDelta": record.actualCost - record.estimatedCost,
+            "estimatedCost": record.estimatedCostKnown == true ? record.estimatedCost : NSNull(),
+            "actualCost": record.actualCostKnown == true ? record.actualCost : NSNull(),
+            "costDelta": record.estimatedCostKnown == true && record.actualCostKnown == true
+                ? record.actualCost - record.estimatedCost
+                : NSNull(),
             "estimatedTokens": record.estimatedTokens,
             "actualTokens": record.actualTokens,
             "tokenDelta": record.actualTokens - record.estimatedTokens,
