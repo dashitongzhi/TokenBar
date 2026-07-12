@@ -253,14 +253,15 @@ enum LocalAPIPayloadBuilder {
             "workspacePath": record.workspacePath ?? NSNull(),
             "sessionID": record.sessionID ?? NSNull(),
             "taskID": record.taskID ?? NSNull(),
-            "estimatedCost": record.estimatedCostKnown == true ? record.estimatedCost : NSNull(),
-            "actualCost": record.actualCostKnown == true ? record.actualCost : NSNull(),
-            "costDelta": record.estimatedCostKnown == true && record.actualCostKnown == true
+            // Nil markers denote a record persisted before the markers existed.
+            "estimatedCost": record.estimatedCostKnown != false ? record.estimatedCost : NSNull(),
+            "actualCost": record.actualCostKnown != false ? record.actualCost : NSNull(),
+            "costDelta": record.estimatedCostKnown != false && record.actualCostKnown != false
                 ? record.actualCost - record.estimatedCost
                 : NSNull(),
-            "estimatedTokens": record.estimatedTokensKnown == true ? record.estimatedTokens : NSNull(),
-            "actualTokens": record.actualTokensKnown == true ? record.actualTokens : NSNull(),
-            "tokenDelta": record.estimatedTokensKnown == true && record.actualTokensKnown == true
+            "estimatedTokens": record.estimatedTokensKnown != false ? record.estimatedTokens : NSNull(),
+            "actualTokens": record.actualTokensKnown != false ? record.actualTokens : NSNull(),
+            "tokenDelta": record.estimatedTokensKnown != false && record.actualTokensKnown != false
                 ? record.actualTokens - record.estimatedTokens
                 : NSNull(),
             "inputTokens": record.inputTokens ?? NSNull(),

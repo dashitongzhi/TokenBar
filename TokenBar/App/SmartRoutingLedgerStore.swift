@@ -227,18 +227,20 @@ final class SmartRoutingLedgerStore {
 
 private extension SmartRoutingRunRecord {
     var hasKnownEstimatedCost: Bool {
-        estimatedCostKnown == true
+        // Records written before the known-value markers were introduced stored
+        // numeric values directly. Preserve their existing totals on upgrade.
+        estimatedCostKnown != false
     }
 
     var hasKnownActualCost: Bool {
-        actualCostKnown == true
+        actualCostKnown != false
     }
 
     var hasKnownEstimatedTokens: Bool {
-        estimatedTokensKnown == true
+        estimatedTokensKnown != false
     }
 
     var hasKnownActualTokens: Bool {
-        actualTokensKnown == true
+        actualTokensKnown != false
     }
 }
