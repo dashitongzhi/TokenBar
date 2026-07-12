@@ -2062,6 +2062,44 @@ final class AppState: ObservableObject {
               tokenCapDecision.reasons.contains("Estimated run tokens are above the workspace token cap.") else {
             throw WorkspaceBudgetPeriodsSmokeFailure("Workspace raw-token cap was not enforced.")
         }
+
+        guard var provider = AppSeedData.providers().first(where: { $0.id == "openai" }) else {
+            throw WorkspaceBudgetPeriodsSmokeFailure("Could not construct provider source smoke data.")
+        }
+        provider.apply(localUsage: LocalAgentUsageAppliedSnapshot(
+            agent: .codex,
+            providerID: "openai",
+            model: "gpt-5",
+            workspaceID: workspace.id,
+            sessionKey: "provider-source-smoke",
+            sourceName: "smoke",
+            costDelta: 0.42,
+            tokenDelta: 12_000,
+            requestDelta: 1,
+            contextTokenTotal: 12_000,
+            contextWindowSize: 128_000,
+            rateLimitUsedPercentage: nil,
+            rateLimitResetAt: nil,
+            occurredAt: now,
+            sourceDetail: "smoke local usage"
+        ))
+        provider.apply(snapshot: OpenAIUsageSnapshot(
+            tokenTotal: 50_000,
+            tokenToday: 20_000,
+            requestCountMonth: 3,
+            requestCountToday: 2,
+            spendToday: 1.2,
+            spendMonth: 4.8,
+            currency: "usd",
+            resetAt: now.addingTimeInterval(86_400),
+            fetchedAt: now.addingTimeInterval(60),
+            history: []
+        ))
+        guard provider.sourceKind == .live,
+              provider.localAgentUsage?.spendToday == 0.42,
+              provider.localAgentUsage?.tokensToday == 12_000 else {
+            throw WorkspaceBudgetPeriodsSmokeFailure("Live refresh overwrote local agent usage.")
+        }
     }
 
     private func smokeDate(year: Int, month: Int, day: Int, calendar: Calendar) throws -> Date {

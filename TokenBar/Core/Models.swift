@@ -191,6 +191,16 @@ struct UsagePoint: Identifiable, Codable, Equatable {
     var value: Double
 }
 
+struct LocalAgentUsageSummary: Codable, Equatable {
+    var tokensToday: Double
+    var requestCountToday: Int
+    var requestCountMonth: Int
+    var spendToday: Double
+    var spendMonth: Double
+    var lastUpdated: Date
+    var sourceDetail: String
+}
+
 struct ProviderUsage: Identifiable, Codable, Equatable {
     var id: String
     var name: String
@@ -216,6 +226,7 @@ struct ProviderUsage: Identifiable, Codable, Equatable {
     var spendTodayKnown: Bool? = nil
     var spendMonthKnown: Bool? = nil
     var healthAlerts: [ProviderHealthAlert]? = nil
+    var localAgentUsage: LocalAgentUsageSummary? = nil
 
     var usageRatio: Double {
         guard hasKnownQuotaLimit else { return 0 }
@@ -535,6 +546,25 @@ struct ProviderUsage: Identifiable, Codable, Equatable {
     }
 
     mutating func apply(localUsage: LocalAgentUsageAppliedSnapshot) {
+        var summary = localAgentUsage ?? LocalAgentUsageSummary(
+            tokensToday: 0,
+            requestCountToday: 0,
+            requestCountMonth: 0,
+            spendToday: 0,
+            spendMonth: 0,
+            lastUpdated: localUsage.occurredAt,
+            sourceDetail: localUsage.sourceDetail
+        )
+        summary.tokensToday += localUsage.tokenDelta
+        summary.requestCountToday += localUsage.requestDelta
+        summary.requestCountMonth += localUsage.requestDelta
+        summary.spendToday += localUsage.costDelta
+        summary.spendMonth += localUsage.costDelta
+        summary.lastUpdated = localUsage.occurredAt
+        summary.sourceDetail = localUsage.sourceDetail
+        localAgentUsage = summary
+
+        guard sourceKind != .live && sourceKind != .ccSwitch else { return }
         if localUsage.contextTokenTotal > 0 {
             current = localUsage.contextTokenTotal
         } else if localUsage.tokenDelta > 0 {

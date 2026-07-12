@@ -132,6 +132,17 @@ enum LocalAPIPayloadBuilder {
                 "spendMonth": provider.hasKnownSpendMonth ? provider.spendMonth as Any : NSNull() as Any,
                 "currency": provider.displayCurrency
             ]
+            metric["localAgentUsage"] = provider.localAgentUsage.map { summary in
+                [
+                    "tokensToday": summary.tokensToday,
+                    "requestCountToday": summary.requestCountToday,
+                    "requestCountMonth": summary.requestCountMonth,
+                    "spendToday": summary.spendToday,
+                    "spendMonth": summary.spendMonth,
+                    "lastUpdated": ISO8601DateFormatter().string(from: summary.lastUpdated),
+                    "sourceDetail": summary.sourceDetail
+                ]
+            } ?? NSNull()
             metric["predictedExhaustion"] = provider.predictedExhaustion.map { ISO8601DateFormatter().string(from: $0) } ?? NSNull()
             return [
                 "platform": provider.id,

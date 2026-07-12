@@ -43,6 +43,17 @@ struct ProviderUsageStore {
     private static func normalized(_ providers: [ProviderUsage]) -> [ProviderUsage] {
         providers.map { provider in
             var normalized = provider
+            if normalized.sourceKind == .localAgent, normalized.localAgentUsage == nil {
+                normalized.localAgentUsage = LocalAgentUsageSummary(
+                    tokensToday: normalized.tokensToday ?? 0,
+                    requestCountToday: normalized.requestCountToday ?? 0,
+                    requestCountMonth: normalized.requestCountMonth ?? 0,
+                    spendToday: normalized.spendToday,
+                    spendMonth: normalized.spendMonth,
+                    lastUpdated: normalized.lastUpdated,
+                    sourceDetail: normalized.sourceDescription
+                )
+            }
             if normalized.id == "openai" {
                 normalized.quotaLimitKnown = normalized.dataSource == .live ? false : normalized.quotaLimitKnown ?? false
                 if normalized.dataSource != .live && normalized.dataSource != .localAgent && normalized.dataSource != .ccSwitch {
