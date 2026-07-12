@@ -18,6 +18,16 @@ struct TokenBarApp: App {
                 exit(1)
             }
         }
+        if CommandLine.arguments.contains("--tokenbar-verify-workspace-budget-periods") {
+            do {
+                try AppState.shared.verifyWorkspaceBudgetPeriodsSmoke()
+                FileHandle.standardError.write(Data("TokenBar verify mode: workspace budget periods smoke passed\n".utf8))
+                exit(0)
+            } catch {
+                FileHandle.standardError.write(Data("TokenBar verify mode: workspace budget periods smoke failed: \(error)\n".utf8))
+                exit(1)
+            }
+        }
         #endif
 
         // Used by script/build_and_run.sh --verify to exercise LocalAPIServer without LaunchServices.

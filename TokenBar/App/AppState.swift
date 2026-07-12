@@ -148,6 +148,7 @@ final class AppState: ObservableObject {
         model: "unspecified",
         estimatedCost: 0,
         projectedDailySpend: 0,
+        projectedMonthlySpend: 0,
         reasons: ["Workspace, provider, model, and budget are inside policy."],
         recommendation: "Select a model before running an agent.",
         fallbackProviderID: "anthropic"
@@ -552,13 +553,14 @@ final class AppState: ObservableObject {
         shouldRecord: Bool = true,
         workspacePolicies evaluationWorkspacePolicies: [WorkspacePolicy]? = nil
     ) -> PolicyDecision {
+        normalizeWorkspaceSpendBuckets()
         let activeWorkspacePolicies = evaluationWorkspacePolicies ?? workspacePolicies
         var decision = PolicyEngine.evaluate(
             input: input,
             workspaces: activeWorkspacePolicies,
             selectedWorkspace: selectedWorkspace,
             providers: providers,
-            projectedSessionSpend: projectedSessionSpend,
+            projectedSessionSpend: sessionSpend + input.estimatedCost,
             sessionBudget: sessionBudget
         )
         decision.routingMode = routingMode
@@ -783,10 +785,13 @@ final class AppState: ObservableObject {
     }
 
     func policyJSON() -> Data {
-        LocalAPIPayloadBuilder.policyJSON(currentDecision: currentDecision, workspacePolicies: workspacePolicies)
+        normalizeWorkspaceSpendBuckets()
+        currentDecision = evaluatePolicy(input: currentPolicyInput, shouldRecord: false)
+        return LocalAPIPayloadBuilder.policyJSON(currentDecision: currentDecision, workspacePolicies: workspacePolicies)
     }
 
     func policyDecisionJSON(input: PolicyEvaluationInput) -> Data {
+        normalizeWorkspaceSpendBuckets()
         let transientWorkspacePolicies = workspacePoliciesForPolicyEvaluation(input)
         let decision = evaluatePolicy(input: input, shouldRecord: false, workspacePolicies: transientWorkspacePolicies)
         currentDecision = decision
@@ -800,7 +805,9 @@ final class AppState: ObservableObject {
             workspaceID: snapshot.workspaceID ?? selectedWorkspaceID,
             providerID: snapshot.providerID,
             model: snapshot.model,
-            estimatedCost: snapshot.costDelta,
+            // The delta has already been applied to the workspace total. Passing it
+            // again here would make the returned policy decision count it twice.
+            estimatedCost: 0,
             estimatedTokens: Int(snapshot.tokenDelta),
             intent: "local_usage_ingest"
         )
@@ -1048,7 +1055,24 @@ final class AppState: ObservableObject {
     }
 
     private func persistWorkspacePolicies() {
+        #if DEBUG
+        guard isPersistenceSuppressedForVerification == false else { return }
+        #endif
         workspacePolicyStore.save(workspacePolicies)
+    }
+
+    @discardableResult
+    private func normalizeWorkspaceSpendBuckets(now: Date = .now) -> Bool {
+        var normalized = workspacePolicies
+        var changed = false
+        for index in normalized.indices {
+            let didReset = normalized[index].resetExpiredSpendBuckets(now: now)
+            changed = didReset || changed
+        }
+        guard changed else { return false }
+        workspacePolicies = normalized
+        persistWorkspacePolicies()
+        return true
     }
 
     private func rebuildPolicyInput() {
@@ -1328,6 +1352,7 @@ final class AppState: ObservableObject {
         let agent = input.agent ?? defaultAgent(providerID: providerID)
         let model = normalizedModel(input.model, providerID: providerID)
         let workspaceID = upsertWorkspacePolicy(from: input, providerID: providerID)
+        normalizeWorkspaceSpendBuckets()
         ensureProviderExists(providerID: providerID)
 
         let contextTokenTotal = Double(input.totalTokens ?? ((input.inputTokens ?? 0) + (input.outputTokens ?? 0)))
@@ -1369,6 +1394,9 @@ final class AppState: ObservableObject {
         if let workspaceID, let workspaceIndex = workspacePolicies.firstIndex(where: { $0.id == workspaceID }) {
             workspacePolicies[workspaceIndex].spendToday += delta.costUSD
             workspacePolicies[workspaceIndex].spendMonth += delta.costUSD
+        }
+        if sessionBudget > 0 {
+            sessionSpend += delta.costUSD
         }
         addAudit(
             provider: agent.displayName,
@@ -1925,12 +1953,101 @@ final class AppState: ObservableObject {
             throw MiniMaxCCSwitchFallbackAuditSmokeFailure("AppState recorded quota.needs_key even though CC Switch had MiniMax percent quota.")
         }
     }
+
+    func verifyWorkspaceBudgetPeriodsSmoke() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
+        let now = try smokeDate(year: 2026, month: 7, day: 12, calendar: calendar)
+        var workspace = WorkspacePolicy(
+            id: "budget-smoke",
+            name: "Budget Smoke",
+            pathHint: "~",
+            client: "local",
+            dailyBudget: 10,
+            monthlyBudget: 20,
+            spendToday: 7,
+            spendMonth: 19,
+            spendDayKey: "2026-07-11",
+            spendMonthKey: "2026-06",
+            allowedProviderIDs: ["openai"],
+            blockedModels: [],
+            maxEstimatedRunCost: 0,
+            requireCompanyKey: false
+        )
+
+        guard workspace.resetExpiredSpendBuckets(now: now, calendar: calendar),
+              workspace.spendToday == 0,
+              workspace.spendMonth == 0,
+              workspace.spendDayKey == "2026-07-12",
+              workspace.spendMonthKey == "2026-07" else {
+            throw WorkspaceBudgetPeriodsSmokeFailure("Expired daily and monthly workspace spend was not reset.")
+        }
+
+        workspace.spendToday = 1
+        workspace.spendMonth = 19
+        let input = PolicyEvaluationInput(
+            agent: .codex,
+            workspaceID: workspace.id,
+            providerID: "openai",
+            model: "gpt-5",
+            estimatedCost: 2,
+            estimatedTokens: 0,
+            intent: "budget-smoke"
+        )
+        let decision = PolicyEngine.evaluate(
+            input: input,
+            workspaces: [workspace],
+            selectedWorkspace: workspace,
+            providers: [],
+            projectedSessionSpend: 2,
+            sessionBudget: 10
+        )
+        guard decision.status == .block, decision.projectedMonthlySpend == 21 else {
+            throw WorkspaceBudgetPeriodsSmokeFailure("Monthly workspace budget was not enforced.")
+        }
+
+        let alreadyAppliedDecision = PolicyEngine.evaluate(
+            input: PolicyEvaluationInput(
+                agent: .codex,
+                workspaceID: workspace.id,
+                providerID: "openai",
+                model: "gpt-5",
+                estimatedCost: 0,
+                estimatedTokens: 0,
+                intent: "usage-ingest-smoke"
+            ),
+            workspaces: [workspace],
+            selectedWorkspace: workspace,
+            providers: [],
+            projectedSessionSpend: 2,
+            sessionBudget: 10
+        )
+        guard alreadyAppliedDecision.projectedDailySpend == 1,
+              alreadyAppliedDecision.projectedMonthlySpend == 19 else {
+            throw WorkspaceBudgetPeriodsSmokeFailure("Applied local usage was counted again during policy evaluation.")
+        }
+    }
+
+    private func smokeDate(year: Int, month: Int, day: Int, calendar: Calendar) throws -> Date {
+        guard let date = calendar.date(from: DateComponents(year: year, month: month, day: day)) else {
+            throw WorkspaceBudgetPeriodsSmokeFailure("Could not construct the budget smoke-test date.")
+        }
+        return date
+    }
     #endif
 
 }
 
 #if DEBUG
 private struct MiniMaxCCSwitchFallbackAuditSmokeFailure: Error, CustomStringConvertible {
+    var description: String
+
+    init(_ description: String) {
+        self.description = description
+    }
+}
+
+private struct WorkspaceBudgetPeriodsSmokeFailure: Error, CustomStringConvertible {
     var description: String
 
     init(_ description: String) {

@@ -27,6 +27,7 @@ struct PolicyEngine {
             )
         let provider = providers.first { $0.id == input.providerID }
         let projectedDailySpend = workspace.spendToday + input.estimatedCost
+        let projectedMonthlySpend = workspace.spendMonth + input.estimatedCost
         let modelIsUnspecified = input.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || input.model == "unspecified"
         var status: PolicyDecisionStatus = .allow
@@ -58,6 +59,14 @@ struct PolicyEngine {
         } else if workspace.dailyBudget > 0 && projectedDailySpend >= workspace.dailyBudget * 0.8 && status != .block {
             status = .warn
             reasons.append("Projected daily spend is close to the workspace budget.")
+        }
+
+        if workspace.monthlyBudget > 0 && projectedMonthlySpend >= workspace.monthlyBudget {
+            status = .block
+            reasons.append("Projected monthly spend would exceed the workspace budget.")
+        } else if workspace.monthlyBudget > 0 && projectedMonthlySpend >= workspace.monthlyBudget * 0.8 && status != .block {
+            status = .warn
+            reasons.append("Projected monthly spend is close to the workspace budget.")
         }
 
         if let provider, provider.status == .critical && status != .block {
@@ -104,6 +113,7 @@ struct PolicyEngine {
             model: input.model,
             estimatedCost: input.estimatedCost,
             projectedDailySpend: projectedDailySpend,
+            projectedMonthlySpend: projectedMonthlySpend,
             reasons: reasons,
             recommendation: recommendation,
             fallbackProviderID: fallback

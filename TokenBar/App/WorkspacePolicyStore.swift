@@ -12,7 +12,11 @@ struct WorkspacePolicyStore {
 
     func load(defaults: [WorkspacePolicy]) -> [WorkspacePolicy] {
         guard let data = try? Data(contentsOf: storeURL) else {
-            return defaults
+            var normalizedDefaults = defaults
+            if normalizeExpiredSpendBuckets(in: &normalizedDefaults) {
+                save(normalizedDefaults)
+            }
+            return normalizedDefaults
         }
         guard let saved = try? JSONDecoder.tokenBar.decode([WorkspacePolicy].self, from: data) else {
             save(defaults)
@@ -37,6 +41,9 @@ struct WorkspacePolicyStore {
                 changed = true
             }
         }
+        if normalizeExpiredSpendBuckets(in: &merged) {
+            changed = true
+        }
         if changed {
             save(merged)
         }
@@ -49,6 +56,15 @@ struct WorkspacePolicyStore {
     }
 
     private static let demoSeedIDs: Set<String> = ["client-app", "personal-lab", "production-fix"]
+
+    private func normalizeExpiredSpendBuckets(in policies: inout [WorkspacePolicy]) -> Bool {
+        var changed = false
+        for index in policies.indices {
+            let didReset = policies[index].resetExpiredSpendBuckets()
+            changed = didReset || changed
+        }
+        return changed
+    }
 
     private static func mergeInferredDefaults(into saved: WorkspacePolicy, defaultPolicy: WorkspacePolicy) -> WorkspacePolicy {
         var merged = saved

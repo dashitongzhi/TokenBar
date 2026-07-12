@@ -907,6 +907,10 @@ struct WorkspacePolicy: Identifiable, Codable, Equatable {
     var monthlyBudget: Double
     var spendToday: Double
     var spendMonth: Double
+    /// Calendar buckets for the mutable spend totals. Missing keys are treated as
+    /// unverified legacy data and reset rather than carrying a stale total forward.
+    var spendDayKey: String? = nil
+    var spendMonthKey: String? = nil
     var allowedProviderIDs: [String]
     var blockedModels: [String]
     var maxEstimatedRunCost: Double
@@ -926,6 +930,29 @@ struct WorkspacePolicy: Identifiable, Codable, Equatable {
         if dailyRatio >= 1 { return .critical }
         if dailyRatio >= 0.8 { return .warning }
         return .healthy
+    }
+
+    @discardableResult
+    mutating func resetExpiredSpendBuckets(now: Date = .now, calendar: Calendar = .current) -> Bool {
+        let components = calendar.dateComponents([.year, .month, .day], from: now)
+        guard let year = components.year, let month = components.month, let day = components.day else {
+            return false
+        }
+
+        let currentDayKey = String(format: "%04d-%02d-%02d", year, month, day)
+        let currentMonthKey = String(format: "%04d-%02d", year, month)
+        var changed = false
+        if spendDayKey != currentDayKey {
+            spendToday = 0
+            spendDayKey = currentDayKey
+            changed = true
+        }
+        if spendMonthKey != currentMonthKey {
+            spendMonth = 0
+            spendMonthKey = currentMonthKey
+            changed = true
+        }
+        return changed
     }
 }
 
@@ -988,6 +1015,7 @@ struct PolicyDecision: Identifiable, Codable, Equatable {
     var model: String
     var estimatedCost: Double
     var projectedDailySpend: Double
+    var projectedMonthlySpend: Double
     var reasons: [String]
     var recommendation: String
     var fallbackProviderID: String?

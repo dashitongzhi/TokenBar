@@ -1609,6 +1609,7 @@ module TokenBarCLI
   def offline_policy_response(input, config)
     workspace = offline_workspace(config, input["workspaceID"])
     projected_daily_spend = workspace["spendToday"].to_f + input["estimatedCost"].to_f
+    projected_monthly_spend = workspace["spendMonth"].to_f + input["estimatedCost"].to_f
     status = "allow"
     reasons = []
 
@@ -1641,6 +1642,15 @@ module TokenBarCLI
       reasons << "Projected daily spend is close to the workspace budget."
     end
 
+    monthly_budget = workspace["monthlyBudget"].to_f
+    if monthly_budget.positive? && projected_monthly_spend >= monthly_budget
+      status = "block"
+      reasons << "Projected monthly spend would exceed the workspace budget."
+    elsif monthly_budget.positive? && projected_monthly_spend >= monthly_budget * 0.8 && status != "block"
+      status = "warn"
+      reasons << "Projected monthly spend is close to the workspace budget."
+    end
+
     reasons << "Workspace, provider, model, and budget are inside policy." if reasons.empty?
     fallback = workspace["allowedProviderIDs"].find { |provider| provider != input["providerID"] }
     recommendation = recommendation(status, input["model"], fallback)
@@ -1662,6 +1672,7 @@ module TokenBarCLI
         "keySource" => input["keySource"],
         "estimatedCost" => input["estimatedCost"].to_f,
         "projectedDailySpend" => projected_daily_spend,
+        "projectedMonthlySpend" => projected_monthly_spend,
         "reasons" => reasons,
         "recommendation" => recommendation,
         "fallbackProvider" => fallback,
@@ -1914,4 +1925,4 @@ module TokenBarCLI
   end
 end
 
-TokenBarCLI.main(ARGV)
+TokenBarCLI.main(ARGV) if $PROGRAM_NAME == __FILE__
