@@ -1647,7 +1647,7 @@ module TokenBarCLI
 
     if workspace["requireCompanyKey"] && input["providerID"] == "openai"
       status = "block"
-      reasons << "Offline policy cannot verify a company-managed key; start the TokenBar app with a stored OpenAI organization credential."
+      reasons << "Company-key provenance requires an agent-bound credential or proxy; offline policy cannot verify it."
     end
 
     daily_budget = workspace["dailyBudget"].to_f

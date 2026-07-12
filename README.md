@@ -394,7 +394,7 @@ TOKENBAR_ESTIMATED_TOKENS=20000
 TOKENBAR_INTENT=refactor
 ```
 
-For Codex `UserPromptSubmit`, `TOKENBAR_PROVIDER`, `TOKENBAR_MODEL`, `TOKENBAR_ESTIMATED_COST`, and `TOKENBAR_ESTIMATED_TOKENS` are optional. When Codex supplies a prompt but not an estimate, the hook pipes the JSON payload to `tokenbar check --codex-hook-json`; the CLI estimates prompt tokens and likely run cost before evaluating normal workspace policy. `require_company_key` does not trust `TOKENBAR_KEY_SOURCE` or `--key-source`: the running TokenBar app must find an OpenAI organization credential in its Keychain. When the app is unavailable, the offline fallback blocks instead of trusting a self-reported provenance.
+For Codex `UserPromptSubmit`, `TOKENBAR_PROVIDER`, `TOKENBAR_MODEL`, `TOKENBAR_ESTIMATED_COST`, and `TOKENBAR_ESTIMATED_TOKENS` are optional. When Codex supplies a prompt but not an estimate, the hook pipes the JSON payload to `tokenbar check --codex-hook-json`; the CLI estimates prompt tokens and likely run cost before evaluating normal workspace policy. `require_company_key` does not trust `TOKENBAR_KEY_SOURCE`, `--key-source`, or the presence of a TokenBar Keychain credential: TokenBar cannot prove which credential an external agent will use. Until an agent-bound credential or proxy is configured, OpenAI runs in such a workspace are conservatively blocked, including when the app is unavailable.
 
 This means expensive Codex prompts can be stopped before they run: if the estimated prompt/run tokens imply a cost above `budgets.max_run`, exceed `rules.max_estimated_tokens`, or push projected daily/monthly spend past the workspace budget, `UserPromptSubmit` returns a Codex block decision. Set `rules.max_estimated_tokens` to `0` to disable the raw-token rule.
 

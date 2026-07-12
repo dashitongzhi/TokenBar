@@ -393,7 +393,7 @@ TOKENBAR_ESTIMATED_TOKENS=20000
 TOKENBAR_INTENT=refactor
 ```
 
-Codex `UserPromptSubmit` 里，`TOKENBAR_PROVIDER`、`TOKENBAR_MODEL`、`TOKENBAR_ESTIMATED_COST`、`TOKENBAR_ESTIMATED_TOKENS` 都是可选的。Codex 只提供 prompt 而没有估算值时，hook 会把 JSON payload 管道传给 `tokenbar check --codex-hook-json`；CLI 会根据 prompt、model 和 Codex pricing 做一个保守估算，再执行正常 workspace policy。`require_company_key` 不再信任 `TOKENBAR_KEY_SOURCE` 或 `--key-source` 的自报值：运行中的 TokenBar 必须在其 Keychain 中发现 OpenAI 组织凭据。App 不可用时，离线 fallback 会阻断，而不是信任自报来源。
+Codex `UserPromptSubmit` 里，`TOKENBAR_PROVIDER`、`TOKENBAR_MODEL`、`TOKENBAR_ESTIMATED_COST`、`TOKENBAR_ESTIMATED_TOKENS` 都是可选的。Codex 只提供 prompt 而没有估算值时，hook 会把 JSON payload 管道传给 `tokenbar check --codex-hook-json`；CLI 会根据 prompt、model 和 Codex pricing 做一个保守估算，再执行正常 workspace policy。`require_company_key` 不信任 `TOKENBAR_KEY_SOURCE`、`--key-source` 或 TokenBar Keychain 中仅“存在”的凭据：TokenBar 无法证明外部 agent 实际会使用哪一个凭据。在配置可与 agent 绑定的凭据或代理之前，该工作区中的 OpenAI 运行会保守阻断；App 不可用时也同样如此。
 
 也就是说，昂贵的 Codex prompt 可以在真正运行前被拦截：如果估算出的 prompt/run token 会换算成超过 `budgets.max_run` 的成本、超过 `rules.max_estimated_tokens`，或者让 projected daily/monthly spend 超过工作区预算，`UserPromptSubmit` 会返回 Codex block decision。将 `rules.max_estimated_tokens` 设为 `0` 可关闭原始 token 规则。
 

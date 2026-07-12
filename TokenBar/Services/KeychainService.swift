@@ -5,18 +5,6 @@ actor KeychainService {
     static let shared = KeychainService()
     private let service = "com.tokenbar.api-keys"
 
-    nonisolated static func hasStoredOpenAIAdminCredential() -> Bool {
-        ["OPENAI_ADMIN_KEY", "TOKENBAR_OPENAI_ADMIN_KEY", "openai.admin_key", "openai.adminKey"].contains { key in
-            let query: [String: Any] = [
-                kSecClass as String: kSecClassGenericPassword,
-                kSecAttrService as String: "com.tokenbar.api-keys",
-                kSecAttrAccount as String: "default.\(key)",
-                kSecMatchLimit as String: kSecMatchLimitOne
-            ]
-            return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
-        }
-    }
-
     func store(value: String, for key: String, workspace: String = "default") throws {
         let account = "\(workspace).\(key)"
         let data = Data(value.utf8)

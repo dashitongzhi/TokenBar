@@ -56,15 +56,15 @@ payload="$(ruby -rjson -e '
     "workspaceName" => "Transient Regression Workspace",
     "workspacePath" => "/tmp/tokenbar-transient-regression",
     "workspaceClient" => "local",
-    "providerID" => "anthropic",
-    "model" => "claude-sonnet",
+    "providerID" => "openai",
+    "model" => "gpt-5",
     "estimatedCost" => 0.01,
     "estimatedTokens" => 1000,
     "intent" => "regression-smoke",
     "allowedProviderIDs" => ["openai"],
     "blockedModels" => [],
     "maxEstimatedRunCost" => 1.0,
-    "requireCompanyKey" => false,
+    "requireCompanyKey" => true,
     "preferredProviderID" => "openai",
     "preferredModel" => "gpt-5"
   })
@@ -78,7 +78,7 @@ decision="$(curl -fsS --max-time 3 \
 
 status="$(printf "%s" "$decision" | json_field "decision.status")"
 decision_workspace_id="$(printf "%s" "$decision" | json_field "decision.workspace.id")"
-[[ "$status" == "block" ]] || fail "expected transient policy to block anthropic, got status=$status"
+[[ "$status" == "block" ]] || fail "expected transient policy to block unverifiable OpenAI company-key provenance, got status=$status"
 [[ "$decision_workspace_id" == "$WORKSPACE_ID" ]] || fail "expected decision workspace $WORKSPACE_ID, got $decision_workspace_id"
 
 after_policy="$(curl -fsS --max-time 3 \

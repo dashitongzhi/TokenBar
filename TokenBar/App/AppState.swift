@@ -792,19 +792,14 @@ final class AppState: ObservableObject {
 
     func policyDecisionJSON(input: PolicyEvaluationInput) -> Data {
         var verifiedInput = input
-        verifiedInput.keySource = verifiedKeySource(for: input)
+        // The local API cannot prove which credential an external agent will
+        // use. Do not promote a Keychain credential into request provenance.
+        verifiedInput.keySource = nil
         normalizeWorkspaceSpendBuckets()
         let transientWorkspacePolicies = workspacePoliciesForPolicyEvaluation(verifiedInput)
         let decision = evaluatePolicy(input: verifiedInput, shouldRecord: false, workspacePolicies: transientWorkspacePolicies)
         currentDecision = decision
         return LocalAPIPayloadBuilder.policyDecisionJSON(decision)
-    }
-
-    private func verifiedKeySource(for input: PolicyEvaluationInput) -> String? {
-        guard input.providerID == "openai", KeychainService.hasStoredOpenAIAdminCredential() else {
-            return nil
-        }
-        return "tokenbar_keychain"
     }
 
     func ingestLocalAgentUsageJSON(input: LocalAgentUsageIngest) -> Data {
