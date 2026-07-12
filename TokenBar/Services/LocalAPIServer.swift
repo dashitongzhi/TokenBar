@@ -6,6 +6,10 @@ import OSLog
 final class LocalAPIServer {
     static let shared = LocalAPIServer(appState: .shared)
 
+    private nonisolated static let maximumHeaderBytes = 32 * 1024
+    private nonisolated static let maximumBodyBytes = 1_024 * 1_024
+    private nonisolated static let readTimeout: DispatchTimeInterval = .seconds(10)
+
     private let appState: AppState
     private let tokenStore = LocalAPITokenStore()
     private var listener: NWListener?
@@ -29,6 +33,29 @@ final class LocalAPIServer {
 
         var origin: String? {
             headers["origin"]
+        }
+    }
+
+    private enum HTTPRequestReadResult {
+        case incomplete
+        case complete(HTTPRequest)
+        case malformed
+        case tooLarge
+    }
+
+    private final class ConnectionReadDeadline: @unchecked Sendable {
+        private let workItem: DispatchWorkItem
+
+        init(connection: NWConnection) {
+            workItem = DispatchWorkItem { connection.cancel() }
+        }
+
+        func schedule(on queue: DispatchQueue) {
+            queue.asyncAfter(deadline: .now() + LocalAPIServer.readTimeout, execute: workItem)
+        }
+
+        func cancel() {
+            workItem.cancel()
         }
     }
 
@@ -118,21 +145,61 @@ final class LocalAPIServer {
         }
 
         connection.start(queue: queue)
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { [weak self] data, _, _, _ in
+        let timeout = ConnectionReadDeadline(connection: connection)
+        timeout.schedule(on: queue)
+        receiveRequest(connection, buffer: Data(), timeout: timeout)
+    }
+
+    private nonisolated func receiveRequest(_ connection: NWConnection, buffer: Data, timeout: ConnectionReadDeadline) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { [weak self] data, _, isComplete, error in
             guard let self else {
+                timeout.cancel()
                 connection.cancel()
                 return
             }
-            let request = data.flatMap(Self.parseRequest)
-            Task { @MainActor in
-                let routed = self.route(request: request)
-                let response = self.httpResponse(response: routed, request: request)
-                connection.send(content: response, completion: .contentProcessed { _ in
-                    self.queue.asyncAfter(deadline: .now() + 0.05) {
-                        connection.cancel()
-                    }
-                })
+            guard error == nil else {
+                timeout.cancel()
+                connection.cancel()
+                return
             }
+
+            var accumulated = buffer
+            if let data {
+                accumulated.append(data)
+            }
+
+            switch Self.readRequest(from: accumulated) {
+            case .complete(let request):
+                timeout.cancel()
+                self.respond(to: connection, request: request, response: nil)
+            case .malformed:
+                timeout.cancel()
+                self.respond(to: connection, request: nil, response: nil)
+            case .tooLarge:
+                timeout.cancel()
+                self.respond(
+                    to: connection,
+                    request: nil,
+                    response: .error("request_too_large", statusCode: 413, reason: "Payload Too Large")
+                )
+            case .incomplete where isComplete:
+                timeout.cancel()
+                self.respond(to: connection, request: nil, response: nil)
+            case .incomplete:
+                self.receiveRequest(connection, buffer: accumulated, timeout: timeout)
+            }
+        }
+    }
+
+    private nonisolated func respond(to connection: NWConnection, request: HTTPRequest?, response: HTTPResponse?) {
+        Task { @MainActor in
+            let routed = response ?? self.route(request: request)
+            let data = self.httpResponse(response: routed, request: request)
+            connection.send(content: data, completion: .contentProcessed { _ in
+                self.queue.asyncAfter(deadline: .now() + 0.05) {
+                    connection.cancel()
+                }
+            })
         }
     }
 
@@ -283,16 +350,25 @@ final class LocalAPIServer {
         return try? JSONDecoder.tokenBar.decode(SmartRoutingRunInput.self, from: data)
     }
 
-    private nonisolated static func parseRequest(data: Data) -> HTTPRequest? {
+    private nonisolated static func readRequest(from data: Data) -> HTTPRequestReadResult {
         let separator = Data("\r\n\r\n".utf8)
-        guard let range = data.range(of: separator) else { return nil }
+        guard let range = data.range(of: separator) else {
+            return data.count > maximumHeaderBytes ? .tooLarge : .incomplete
+        }
         let headerData = data[..<range.lowerBound]
-        guard let headerText = String(data: headerData, encoding: .utf8) else { return nil }
+        guard headerData.count <= maximumHeaderBytes,
+              let headerText = String(data: headerData, encoding: .utf8) else {
+            return .malformed
+        }
 
         let lines = headerText.components(separatedBy: "\r\n")
-        guard let firstLine = lines.first else { return nil }
+        guard let firstLine = lines.first else { return .malformed }
         let parts = firstLine.split(separator: " ", maxSplits: 2).map(String.init)
-        guard parts.count >= 2 else { return nil }
+        guard parts.count == 3,
+              ["HTTP/1.0", "HTTP/1.1"].contains(parts[2]),
+              parts[1].hasPrefix("/") else {
+            return .malformed
+        }
 
         var path = parts[1]
         if let queryStart = path.firstIndex(of: "?") {
@@ -301,18 +377,37 @@ final class LocalAPIServer {
 
         var headers: [String: String] = [:]
         for line in lines.dropFirst() {
-            guard let separator = line.firstIndex(of: ":") else { continue }
+            guard line.isEmpty == false, let separator = line.firstIndex(of: ":") else { return .malformed }
             let name = line[..<separator].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             let value = line[line.index(after: separator)...].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard name.isEmpty == false, headers[name] == nil else { return .malformed }
             headers[name] = value
         }
 
-        return HTTPRequest(
+        guard headers["transfer-encoding"] == nil else { return .malformed }
+        let declaredBodyLength: Int
+        if let contentLength = headers["content-length"] {
+            guard contentLength.isEmpty == false,
+                  contentLength.allSatisfy({ $0.isNumber }),
+                  let parsedLength = Int(contentLength),
+                  parsedLength <= maximumBodyBytes else {
+                return .tooLarge
+            }
+            declaredBodyLength = parsedLength
+        } else {
+            declaredBodyLength = 0
+        }
+
+        let body = Data(data[range.upperBound...])
+        guard body.count <= declaredBodyLength else { return .malformed }
+        guard body.count == declaredBodyLength else { return .incomplete }
+
+        return .complete(HTTPRequest(
             method: parts[0].uppercased(),
             path: path,
             headers: headers,
-            body: Data(data[range.upperBound...])
-        )
+            body: body
+        ))
     }
 
     private func httpResponse(response: HTTPResponse, request: HTTPRequest?) -> Data {

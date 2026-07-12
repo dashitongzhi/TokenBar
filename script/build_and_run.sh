@@ -284,6 +284,8 @@ case "$MODE" in
     export TOKENBAR_WORKSPACE_POLICY_STORE="$HOME/Library/Application Support/TokenBar/workspace-policies.json"
     stage "Running authenticated local API contract smoke"
     "$ROOT_DIR/script/smoke_local_api_contract.sh"
+    stage "Running local API HTTP framing smoke"
+    "$ROOT_DIR/script/smoke_local_api_request_framing.sh"
     stage "Running local API routing stats smoke"
     bash "$ROOT_DIR/script/smoke_local_api_routing_stats.sh"
     stage "Running local API transient policy smoke"
