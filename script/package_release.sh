@@ -73,6 +73,19 @@ fail() {
   exit 1
 }
 
+safe_remove_release_path() {
+  local target="$1"
+  case "$target" in
+    "$RELEASE_ROOT"/*)
+      [[ "$target" != "$RELEASE_ROOT" ]] || fail "refusing to remove release root"
+      rm -rf -- "$target"
+      ;;
+    *)
+      fail "refusing to remove path outside TOKENBAR_RELEASE_ROOT: $target"
+      ;;
+  esac
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --notarize)
@@ -123,7 +136,9 @@ if [[ "$NOTARIZE" == "1" ]]; then
 fi
 
 cd "$ROOT_DIR"
-rm -rf "$ARCHIVE_PATH" "$STAGING_DIR"
+mkdir -p "$RELEASE_ROOT"
+safe_remove_release_path "$ARCHIVE_PATH"
+safe_remove_release_path "$STAGING_DIR"
 mkdir -p "$(dirname "$ARCHIVE_PATH")" "$STAGING_DIR" "$OUTPUT_DIR"
 
 archive_args=(
@@ -179,9 +194,15 @@ fi
 log "Staging DMG contents"
 cp -R "$APP_BUNDLE" "$STAGING_DIR/"
 ln -s /Applications "$STAGING_DIR/Applications"
+CLI_STAGE="$STAGING_DIR/TokenBar CLI"
+mkdir -p "$CLI_STAGE/bin" "$CLI_STAGE/lib" "$CLI_STAGE/examples"
+cp "$ROOT_DIR/bin/tokenbar" "$CLI_STAGE/bin/tokenbar"
+cp "$ROOT_DIR/lib/tokenbar_cli.rb" "$CLI_STAGE/lib/tokenbar_cli.rb"
+cp -R "$ROOT_DIR/examples/hooks" "$CLI_STAGE/examples/"
+chmod 755 "$CLI_STAGE/bin/tokenbar"
 
 log "Creating DMG at $DMG_PATH"
-rm -f "$DMG_PATH"
+safe_remove_release_path "$DMG_PATH"
 if diskutil image create from --help >/dev/null 2>&1; then
   diskutil image create from \
     --volumeName "$DMG_VOLUME_NAME" \
