@@ -1,23 +1,30 @@
 import Foundation
 
 struct ProviderUsageStore {
-    private let storeURL: URL
+    private let document: JSONDocumentStore<[ProviderUsage]>
 
-    init(fileManager: FileManager = .default) {
-        let support = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? fileManager.temporaryDirectory
-        let directory = support.appendingPathComponent("TokenBar", isDirectory: true)
-        try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        storeURL = directory.appendingPathComponent("providers.json")
+    init(
+        fileManager: FileManager = .default,
+        directoryURL: URL? = nil
+    ) {
+        document = JSONDocumentStore(
+            fileName: "providers.json",
+            fileManager: fileManager,
+            directoryURL: directoryURL
+        )
     }
 
     func load(defaults: [ProviderUsage]) -> [ProviderUsage] {
         let normalizedDefaults = Self.normalized(defaults)
-        guard let data = try? Data(contentsOf: storeURL) else {
+        let providers: [ProviderUsage]
+        switch document.load() {
+        case .missing:
             return normalizedDefaults
-        }
-        guard let providers = try? JSONDecoder.tokenBar.decode([ProviderUsage].self, from: data) else {
+        case .unreadable:
             save(normalizedDefaults)
             return Self.normalized(defaults)
+        case .loaded(let saved):
+            providers = saved
         }
         var changed = false
         var merged = Self.normalized(providers.filter { provider in
@@ -36,8 +43,7 @@ struct ProviderUsageStore {
     }
 
     func save(_ providers: [ProviderUsage]) {
-        guard let data = try? JSONEncoder.tokenBar.encode(providers) else { return }
-        try? data.write(to: storeURL, options: [.atomic])
+        try? document.save(providers)
     }
 
     private static func normalized(_ providers: [ProviderUsage]) -> [ProviderUsage] {

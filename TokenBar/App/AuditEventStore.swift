@@ -1,25 +1,33 @@
 import Foundation
 
 struct AuditEventStore {
-    private let storeURL: URL
+    private let document: JSONDocumentStore<[AuditEvent]>
     private let limit: Int
 
-    init(fileManager: FileManager = .default, limit: Int = 100) {
+    init(
+        fileManager: FileManager = .default,
+        directoryURL: URL? = nil,
+        limit: Int = 100
+    ) {
         self.limit = limit
-        let support = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? fileManager.temporaryDirectory
-        let directory = support.appendingPathComponent("TokenBar", isDirectory: true)
-        try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        storeURL = directory.appendingPathComponent("audit-events.json")
+        document = JSONDocumentStore(
+            fileName: "audit-events.json",
+            fileManager: fileManager,
+            directoryURL: directoryURL
+        )
     }
 
     func load(defaults: [AuditEvent]) -> [AuditEvent] {
-        guard let data = try? Data(contentsOf: storeURL) else {
+        let saved: [AuditEvent]
+        switch document.load() {
+        case .missing:
             return Self.pruned(defaults, limit: limit)
-        }
-        guard let saved = try? JSONDecoder.tokenBar.decode([AuditEvent].self, from: data) else {
+        case .unreadable:
             let cleanedDefaults = Self.pruned(defaults, limit: limit)
             save(cleanedDefaults)
             return cleanedDefaults
+        case .loaded(let events):
+            saved = events
         }
         let cleaned = Self.pruned(Self.removingDemoEvents(saved), limit: limit)
         if cleaned.count != saved.count {
@@ -29,8 +37,7 @@ struct AuditEventStore {
     }
 
     func save(_ events: [AuditEvent]) {
-        guard let data = try? JSONEncoder.tokenBar.encode(Self.pruned(Self.removingDemoEvents(events), limit: limit)) else { return }
-        try? data.write(to: storeURL, options: [.atomic])
+        try? document.save(Self.pruned(Self.removingDemoEvents(events), limit: limit))
     }
 
     private static func pruned(_ events: [AuditEvent], limit: Int) -> [AuditEvent] {

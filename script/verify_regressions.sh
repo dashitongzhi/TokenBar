@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 "$ROOT_DIR/script/verify_minimax_ccswitch_fallback_audit.sh"
 "$ROOT_DIR/script/verify_ccswitch_database.sh"
+"$ROOT_DIR/script/verify_json_document_store.sh"
 "$ROOT_DIR/script/verify_provider_status_severity.sh"
 "$ROOT_DIR/script/verify_local_api_provider_health_quotas.sh"
 "$ROOT_DIR/script/verify_local_api_application.sh"
