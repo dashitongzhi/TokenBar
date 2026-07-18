@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+"$ROOT_DIR/script/verify_source_file_sizes.sh"
 "$ROOT_DIR/script/verify_minimax_ccswitch_fallback_audit.sh"
 "$ROOT_DIR/script/verify_ccswitch_database.sh"
 "$ROOT_DIR/script/verify_json_document_store.sh"
