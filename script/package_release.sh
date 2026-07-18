@@ -6,10 +6,12 @@ SCHEME="TokenBar"
 PROJECT="TokenBar.xcodeproj"
 CONFIGURATION="Release"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-RELEASE_ROOT="${TOKENBAR_RELEASE_ROOT:-$ROOT_DIR/dist/release}"
-ARCHIVE_PATH="${TOKENBAR_ARCHIVE_PATH:-$RELEASE_ROOT/archives/$APP_NAME.xcarchive}"
-STAGING_DIR="$RELEASE_ROOT/staging"
-OUTPUT_DIR="$RELEASE_ROOT/output"
+RELEASE_ROOT_INPUT="${TOKENBAR_RELEASE_ROOT:-$ROOT_DIR/dist/release}"
+ARCHIVE_PATH_INPUT="${TOKENBAR_ARCHIVE_PATH:-}"
+RELEASE_ROOT=""
+ARCHIVE_PATH=""
+STAGING_DIR=""
+OUTPUT_DIR=""
 DMG_VOLUME_NAME="${TOKENBAR_DMG_VOLUME_NAME:-TokenBar}"
 DMG_FORMAT="${TOKENBAR_DMG_FORMAT:-ULMO}"
 SIGNING_MODE="${TOKENBAR_SIGNING:-ad-hoc}"
@@ -73,11 +75,78 @@ fail() {
   exit 1
 }
 
+normalize_absolute_path() {
+  local input="$1"
+  local path
+  local component
+  local result=""
+  local -a components=()
+  local -a normalized=()
+
+  if [[ "$input" == /* ]]; then
+    path="$input"
+  else
+    path="$PWD/$input"
+  fi
+
+  IFS='/' read -r -a components <<< "$path"
+  for component in "${components[@]}"; do
+    case "$component" in
+      ''|.)
+        ;;
+      ..)
+        if [[ "${#normalized[@]}" -gt 0 ]]; then
+          unset 'normalized[${#normalized[@]}-1]'
+        fi
+        ;;
+      *)
+        normalized+=("$component")
+        ;;
+    esac
+  done
+
+  if [[ "${#normalized[@]}" -gt 0 ]]; then
+    for component in "${normalized[@]}"; do
+      result="$result/$component"
+    done
+  fi
+  printf '%s\n' "${result:-/}"
+}
+
+prepare_release_paths() {
+  RELEASE_ROOT="$(normalize_absolute_path "$RELEASE_ROOT_INPUT")"
+  [[ "$RELEASE_ROOT" != "/" ]] || fail "TOKENBAR_RELEASE_ROOT must not be the filesystem root"
+  mkdir -p "$RELEASE_ROOT"
+  RELEASE_ROOT="$(cd "$RELEASE_ROOT" && pwd -P)"
+  [[ "$RELEASE_ROOT" != "/" ]] || fail "TOKENBAR_RELEASE_ROOT must not resolve to the filesystem root"
+
+  if [[ -n "$ARCHIVE_PATH_INPUT" ]]; then
+    ARCHIVE_PATH="$(normalize_absolute_path "$ARCHIVE_PATH_INPUT")"
+  else
+    ARCHIVE_PATH="$RELEASE_ROOT/archives/$APP_NAME.xcarchive"
+  fi
+  STAGING_DIR="$RELEASE_ROOT/staging"
+  OUTPUT_DIR="$RELEASE_ROOT/output"
+}
+
 safe_remove_release_path() {
-  local target="$1"
+  local target
+  local relative
+  local current
+  local component
+  local -a components=()
+
+  target="$(normalize_absolute_path "$1")"
   case "$target" in
     "$RELEASE_ROOT"/*)
       [[ "$target" != "$RELEASE_ROOT" ]] || fail "refusing to remove release root"
+      relative="${target#"$RELEASE_ROOT"/}"
+      current="$RELEASE_ROOT"
+      IFS='/' read -r -a components <<< "$relative"
+      for component in "${components[@]}"; do
+        current="$current/$component"
+        [[ ! -L "$current" ]] || fail "refusing to remove through symlinked release path: $current"
+      done
       rm -rf -- "$target"
       ;;
     *)
@@ -85,6 +154,10 @@ safe_remove_release_path() {
       ;;
   esac
 }
+
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+  return 0
+fi
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -136,7 +209,7 @@ if [[ "$NOTARIZE" == "1" ]]; then
 fi
 
 cd "$ROOT_DIR"
-mkdir -p "$RELEASE_ROOT"
+prepare_release_paths
 safe_remove_release_path "$ARCHIVE_PATH"
 safe_remove_release_path "$STAGING_DIR"
 mkdir -p "$(dirname "$ARCHIVE_PATH")" "$STAGING_DIR" "$OUTPUT_DIR"
@@ -198,8 +271,10 @@ CLI_STAGE="$STAGING_DIR/TokenBar CLI"
 mkdir -p "$CLI_STAGE/bin" "$CLI_STAGE/lib" "$CLI_STAGE/examples"
 cp "$ROOT_DIR/bin/tokenbar" "$CLI_STAGE/bin/tokenbar"
 cp "$ROOT_DIR/lib/tokenbar_cli.rb" "$CLI_STAGE/lib/tokenbar_cli.rb"
+cp -R "$ROOT_DIR/lib/tokenbar_cli" "$CLI_STAGE/lib/tokenbar_cli"
 cp -R "$ROOT_DIR/examples/hooks" "$CLI_STAGE/examples/"
 chmod 755 "$CLI_STAGE/bin/tokenbar"
+"$CLI_STAGE/bin/tokenbar" --help >/dev/null
 
 log "Creating DMG at $DMG_PATH"
 safe_remove_release_path "$DMG_PATH"

@@ -2,31 +2,6 @@ import Foundation
 import Combine
 import AppKit
 
-enum MiniMaxQuotaAuditSemantics {
-    static func hasCCSwitchQuotaFallback(
-        sourceKindRawValue: String,
-        unit: String,
-        hasKnownQuotaLimit: Bool
-    ) -> Bool {
-        sourceKindRawValue == "ccSwitch"
-            && unit == "percent"
-            && hasKnownQuotaLimit
-    }
-
-    static func unavailableAudit(hasCCSwitchQuotaFallback: Bool) -> (action: String, detail: String) {
-        if hasCCSwitchQuotaFallback {
-            return (
-                "quota.fallback",
-                "Direct MiniMax key unavailable; using MiniMax Token Plan quota fetched through CC Switch provider key."
-            )
-        }
-        return (
-            "quota.needs_key",
-            "MiniMax quota refresh skipped because no API key is available"
-        )
-    }
-}
-
 @MainActor
 final class AppState: ObservableObject {
     static let shared = AppState()
@@ -167,16 +142,12 @@ final class AppState: ObservableObject {
     private let providerStore = ProviderUsageStore()
     private let workspacePolicyStore = WorkspacePolicyStore()
     private let auditEventStore = AuditEventStore()
-    private let localAgentUsageLedgerStore = LocalAgentUsageLedgerStore()
+    private let localUsageIngestionModule = LocalUsageIngestionModule()
     private let smartRoutingLedgerStore = SmartRoutingLedgerStore()
-    private let localModelUsageStore = LocalModelUsageStore()
     private let agentModelConfigurationService = AgentModelConfigurationService()
     private let providerModelCatalogService = ProviderModelCatalogService()
-    private let openAIUsageService = OpenAIUsageService()
-    private let anthropicUsageService = AnthropicUsageService()
-    private let openRouterCreditsService = OpenRouterCreditsService()
-    private let codexUsageService = CodexUsageService()
-    private let miniMaxUsageService = MiniMaxUsageService()
+    private let providerRefreshModule = ProviderRefreshModule()
+    private let smartRoutingRecommender = SmartRoutingRecommender()
     private let ccSwitchUsageService = CCSwitchUsageService()
     private var hasExplicitSelectedProviderPreference = false
     private var hasExplicitSelectedWorkspacePreference = false
@@ -223,7 +194,7 @@ final class AppState: ObservableObject {
         workspacePolicies = workspacePolicyStore.load(defaults: AppSeedData.workspacePolicies(inference: inferredPolicy))
         auditEvents = auditEventStore.load(defaults: AppSeedData.auditEvents())
         normalizeSelectionsAfterLoad()
-        mergeModelUsageRollups(localModelUsageStore.load())
+        mergeModelUsageRollups(localUsageIngestionModule.loadModelUsageRollups())
         mergeModelCatalogItems(configuredCatalogItems, replacingProviderID: nil)
         rebuildPolicyInput()
         currentDecision = evaluatePolicy(input: currentPolicyInput, shouldRecord: false)
@@ -394,22 +365,49 @@ final class AppState: ObservableObject {
         reloadModelCatalogFromLocalSources()
 
         Task {
-            async let openAIResult = openAIUsageService.refresh()
-            async let anthropicResult = anthropicUsageService.refresh()
-            async let openRouterResult = openRouterCreditsService.refresh()
-            async let codexResult = codexUsageService.refresh()
-            async let miniMaxResult = miniMaxUsageService.refresh()
-            async let ccSwitchResult = ccSwitchUsageService.refresh()
-            apply(
-                openAIResult: await openAIResult,
-                anthropicResult: await anthropicResult,
-                openRouterResult: await openRouterResult,
-                codexResult: await codexResult,
-                miniMaxResult: await miniMaxResult,
-                ccSwitchResult: await ccSwitchResult
-            )
+            let outcome = await providerRefreshModule.refresh(providers: providers)
+            applyProviderRefreshOutcome(outcome)
         }
     }
+
+    private func applyProviderRefreshOutcome(_ outcome: ProviderRefreshOutcome) {
+        providers = outcome.providers
+        for audit in outcome.audits {
+            addAudit(provider: audit.provider, action: audit.action, detail: audit.detail)
+        }
+        lastRefresh = .now
+        isRefreshingUsage = false
+        currentDecision = evaluatePolicy(input: currentPolicyInput, shouldRecord: false)
+        persistProviders()
+        if CommandLine.arguments.contains("--tokenbar-verify-local-api") == false,
+           CommandLine.arguments.contains("--tokenbar-verify-minimax-ccswitch-fallback-audit") == false {
+            NotificationService.shared.notifyIfNeeded(appState: self)
+        }
+        notifyStatusBarUpdate()
+    }
+
+    #if DEBUG
+    private func apply(
+        openAIResult: OpenAIUsageRefreshResult,
+        anthropicResult: AnthropicUsageRefreshResult,
+        openRouterResult: OpenRouterCreditsRefreshResult,
+        codexResult: CodexUsageRefreshResult,
+        miniMaxResult: MiniMaxUsageRefreshResult,
+        ccSwitchResult: CCSwitchUsageRefreshResult
+    ) {
+        applyProviderRefreshOutcome(providerRefreshModule.apply(
+            ProviderRefreshResults(
+                openAI: openAIResult,
+                anthropic: anthropicResult,
+                openRouter: openRouterResult,
+                codex: codexResult,
+                miniMax: miniMaxResult,
+                ccSwitch: ccSwitchResult
+            ),
+            providers: providers
+        ))
+    }
+    #endif
 
     func storeOpenAIAdminKey(_ key: String) async throws {
         try await KeychainService.shared.store(value: key, for: "OPENAI_ADMIN_KEY")
@@ -584,7 +582,18 @@ final class AppState: ObservableObject {
         input: PolicyEvaluationInput,
         workspacePolicies evaluationWorkspacePolicies: [WorkspacePolicy]
     ) {
-        guard let recommendation = smartRoutingRecommendation(for: input, workspacePolicies: evaluationWorkspacePolicies) else {
+        guard let recommendation = smartRoutingRecommender.recommendation(for: SmartRoutingContext(
+            input: input,
+            workspacePolicies: evaluationWorkspacePolicies,
+            selectedWorkspace: selectedWorkspace,
+            providers: providers,
+            modelUsageRollups: modelUsageRollups,
+            modelCatalogItems: modelCatalogItems,
+            stats: smartRoutingLedgerStore.stats(),
+            projectedSessionSpend: sessionSpend + input.estimatedCost,
+            sessionBudget: sessionBudget,
+            fallbackProviderID: selectedProviderID
+        )) else {
             decision.reasons.append("Smart Routing is enabled, but no eligible model route is available yet.")
             return
         }
@@ -602,166 +611,6 @@ final class AppState: ObservableObject {
         } else {
             decision.reasons.append("Smart Routing agrees with the selected route.")
         }
-    }
-
-    private func smartRoutingRecommendation(
-        for input: PolicyEvaluationInput,
-        workspacePolicies evaluationWorkspacePolicies: [WorkspacePolicy]
-    ) -> SmartRoutingRecommendation? {
-        let workspace = evaluationWorkspacePolicies.first { $0.id == input.workspaceID } ?? selectedWorkspace
-        let stats = smartRoutingLedgerStore.stats()
-        let scored = smartRoutingCandidates(input: input, workspace: workspace, stats: stats).compactMap { candidate -> ScoredSmartRoutingCandidate? in
-            let route = bestRouteStats(for: candidate, intent: input.intent, stats: stats.routeStats)
-            guard let candidateInput = smartRoutingPolicyInput(for: candidate, baseInput: input, route: route, workspace: workspace) else {
-                return nil
-            }
-
-            let candidateDecision = PolicyEngine.evaluate(
-                input: candidateInput,
-                workspaces: evaluationWorkspacePolicies,
-                selectedWorkspace: selectedWorkspace,
-                providers: providers,
-                projectedSessionSpend: sessionSpend + candidateInput.estimatedCost,
-                sessionBudget: sessionBudget
-            )
-            guard candidateDecision.status != .block else {
-                return nil
-            }
-            return ScoredSmartRoutingCandidate(
-                candidate: candidate,
-                score: smartRoutingScore(candidate: candidate, route: route),
-                route: route,
-                estimatedCost: candidateInput.estimatedCost
-            )
-        }
-        .sorted {
-            if $0.score != $1.score { return $0.score > $1.score }
-            if ($0.route?.runCount ?? 0) != ($1.route?.runCount ?? 0) { return ($0.route?.runCount ?? 0) > ($1.route?.runCount ?? 0) }
-            return $0.candidate.model.localizedStandardCompare($1.candidate.model) == .orderedAscending
-        }
-
-        guard let best = scored.first else { return nil }
-        let route = best.route
-        let runCount = route?.runCount ?? 0
-        let winRate = route?.winRate ?? 0
-        let alternatives = scored.dropFirst().prefix(3).map { "\($0.candidate.providerID)/\($0.candidate.model)" }
-        let reason: String
-        if let route, route.runCount > 0 {
-            reason = "Based on \(route.runCount) recorded \(route.taskIntent) runs with \(Int(route.winRate * 100))% win rate."
-        } else if best.candidate.sourceRank <= 1 {
-            reason = "Based on configured local agent models and current policy constraints."
-        } else {
-            reason = "Based on the current selected route and provider health."
-        }
-
-        return SmartRoutingRecommendation(
-            providerID: best.candidate.providerID,
-            model: best.candidate.model,
-            taskIntent: input.intent,
-            confidence: min(max(best.score, 0.1), 0.95),
-            evidenceRunCount: runCount,
-            winRate: winRate,
-            estimatedCost: best.estimatedCost,
-            reason: reason,
-            alternatives: alternatives
-        )
-    }
-
-    private func smartRoutingPolicyInput(
-        for candidate: SmartRoutingCandidate,
-        baseInput: PolicyEvaluationInput,
-        route: SmartRoutingRouteStats?,
-        workspace: WorkspacePolicy?
-    ) -> PolicyEvaluationInput? {
-        guard candidate.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
-              candidate.model != "unspecified"
-        else {
-            return nil
-        }
-
-        let estimatedCost = estimatedCost(candidate: candidate, route: route, baseInput: baseInput)
-        if estimatedCost == nil, (workspace?.maxEstimatedRunCost ?? 0) > 0 {
-            return nil
-        }
-
-        var candidateInput = baseInput
-        candidateInput.providerID = candidate.providerID
-        candidateInput.model = candidate.model
-        candidateInput.estimatedCost = estimatedCost ?? 0
-        return candidateInput
-    }
-
-    private func smartRoutingCandidates(input: PolicyEvaluationInput, workspace: WorkspacePolicy?, stats: SmartRoutingStatsSnapshot) -> [SmartRoutingCandidate] {
-        var candidates: [SmartRoutingCandidate] = []
-
-        func add(providerID: String?, model: String?, sourceRank: Int) {
-            let provider = normalizedProviderID(providerID, model: model, agent: input.agent)
-            let model = normalizedModel(model, providerID: provider)
-            guard model != "unspecified" else { return }
-            candidates.append(SmartRoutingCandidate(providerID: provider, model: model, sourceRank: sourceRank))
-        }
-
-        add(providerID: input.providerID, model: input.model, sourceRank: 2)
-        add(providerID: workspace?.preferredProviderID, model: workspace?.preferredModel, sourceRank: 0)
-        for row in modelUsageRollups {
-            add(providerID: row.providerID, model: row.model, sourceRank: row.source == .localAgent ? 0 : 1)
-        }
-        for item in modelCatalogItems {
-            add(providerID: item.providerID, model: item.modelID, sourceRank: item.source == .localAgentConfig ? 1 : 2)
-        }
-        for route in stats.routeStats.prefix(30) {
-            add(providerID: route.providerID, model: route.model, sourceRank: 0)
-        }
-
-        var seen = Set<String>()
-        return candidates.filter { candidate in
-            let key = "\(candidate.providerID)|\(candidate.model.lowercased())"
-            guard seen.contains(key) == false else { return false }
-            seen.insert(key)
-            return true
-        }
-    }
-
-    private func bestRouteStats(for candidate: SmartRoutingCandidate, intent: String, stats: [SmartRoutingRouteStats]) -> SmartRoutingRouteStats? {
-        stats
-            .filter { route in
-                route.providerID == candidate.providerID &&
-                route.model.caseInsensitiveCompare(candidate.model) == .orderedSame
-            }
-            .sorted {
-                let lhsExact = $0.taskIntent.caseInsensitiveCompare(intent) == .orderedSame
-                let rhsExact = $1.taskIntent.caseInsensitiveCompare(intent) == .orderedSame
-                if lhsExact != rhsExact { return lhsExact }
-                if $0.runCount != $1.runCount { return $0.runCount > $1.runCount }
-                return $0.winRate > $1.winRate
-            }
-            .first
-    }
-
-    private func smartRoutingScore(candidate: SmartRoutingCandidate, route: SmartRoutingRouteStats?) -> Double {
-        var score = max(0.1, 0.35 - Double(candidate.sourceRank) * 0.07)
-        if let route {
-            score = 0.35 + route.winRate * 0.45 + min(Double(route.runCount) / 10, 1) * 0.15 - route.followUpRate * 0.2
-        }
-        if let provider = providers.first(where: { $0.id == candidate.providerID }) {
-            switch provider.status {
-            case .healthy: score += 0.08
-            case .warning: score -= 0.04
-            case .critical: score -= 0.16
-            }
-        }
-        return score
-    }
-
-    private func estimatedCost(candidate: SmartRoutingCandidate, route: SmartRoutingRouteStats?, baseInput: PolicyEvaluationInput) -> Double? {
-        if let route, route.actualCostKnownRunCount > 0, route.actualCostTotal > 0 {
-            return route.actualCostTotal / Double(route.actualCostKnownRunCount)
-        }
-        if candidate.providerID == baseInput.providerID &&
-            candidate.model.caseInsensitiveCompare(baseInput.model) == .orderedSame {
-            return baseInput.estimatedCost
-        }
-        return nil
     }
 
     private func providerDisplayName(_ providerID: String) -> String {
@@ -784,13 +633,13 @@ final class AppState: ObservableObject {
         updateWorkspaceMaxEstimatedRunCost(id: id, value: workspace.maxEstimatedRunCost + delta)
     }
 
-    func policyJSON() -> Data {
+    func policyJSON() throws -> Data {
         normalizeWorkspaceSpendBuckets()
         currentDecision = evaluatePolicy(input: currentPolicyInput, shouldRecord: false)
-        return LocalAPIPayloadBuilder.policyJSON(currentDecision: currentDecision, workspacePolicies: workspacePolicies)
+        return try LocalAPIPayloadBuilder.policyJSON(currentDecision: currentDecision, workspacePolicies: workspacePolicies)
     }
 
-    func policyDecisionJSON(input: PolicyEvaluationInput) -> Data {
+    func policyDecisionJSON(input: PolicyEvaluationInput) throws -> Data {
         var verifiedInput = input
         // The local API cannot prove which credential an external agent will
         // use. Do not promote a Keychain credential into request provenance.
@@ -799,10 +648,10 @@ final class AppState: ObservableObject {
         let transientWorkspacePolicies = workspacePoliciesForPolicyEvaluation(verifiedInput)
         let decision = evaluatePolicy(input: verifiedInput, shouldRecord: false, workspacePolicies: transientWorkspacePolicies)
         currentDecision = decision
-        return LocalAPIPayloadBuilder.policyDecisionJSON(decision)
+        return try LocalAPIPayloadBuilder.policyDecisionJSON(decision)
     }
 
-    func ingestLocalAgentUsageJSON(input: LocalAgentUsageIngest) -> Data {
+    func ingestLocalAgentUsageJSON(input: LocalAgentUsageIngest) throws -> Data {
         let snapshot = applyLocalAgentUsage(input)
         let policyInput = PolicyEvaluationInput(
             agent: snapshot.agent,
@@ -816,17 +665,17 @@ final class AppState: ObservableObject {
             intent: "local_usage_ingest"
         )
         currentDecision = evaluatePolicy(input: policyInput, shouldRecord: false)
-        return LocalAPIPayloadBuilder.localAgentUsageJSON(snapshot: snapshot, decision: currentDecision)
+        return try LocalAPIPayloadBuilder.localAgentUsageJSON(snapshot: snapshot, decision: currentDecision)
     }
 
-    func ingestClaudeStatuslineJSON(data: Data) -> Data {
-        guard let input = Self.claudeStatuslineInput(from: data) else {
+    func ingestClaudeStatuslineJSON(data: Data) throws -> Data {
+        guard let input = ClaudeStatuslineParser.parse(data) else {
             return Data(#"{"error":"invalid_claude_statusline_input"}"#.utf8)
         }
-        return ingestLocalAgentUsageJSON(input: input)
+        return try ingestLocalAgentUsageJSON(input: input)
     }
 
-    func recordSmartRoutingRunJSON(input: SmartRoutingRunInput) -> Data {
+    func recordSmartRoutingRunJSON(input: SmartRoutingRunInput) throws -> Data {
         let record = smartRoutingLedgerStore.record(
             input,
             fallbackWorkspaceID: selectedWorkspaceID,
@@ -837,130 +686,22 @@ final class AppState: ObservableObject {
             action: "routing.\(record.signal.rawValue)",
             detail: "\(record.taskIntent) · \(record.providerID)/\(record.model) · $\(formatMoney(record.actualCost))"
         )
-        return LocalAPIPayloadBuilder.smartRoutingRunJSON(record: record)
+        return try LocalAPIPayloadBuilder.smartRoutingRunJSON(record: record)
     }
 
-    func smartRoutingStatsJSON() -> Data {
-        LocalAPIPayloadBuilder.smartRoutingStatsJSON(snapshot: smartRoutingLedgerStore.stats())
+    func smartRoutingStatsJSON() throws -> Data {
+        try LocalAPIPayloadBuilder.smartRoutingStatsJSON(snapshot: smartRoutingLedgerStore.stats())
     }
 
-    func mcpSnapshotJSON(filteredProviderID: String? = nil) -> Data {
-        LocalAPIPayloadBuilder.mcpSnapshotJSON(providers: providers, filteredProviderID: filteredProviderID)
+    func mcpSnapshotJSON(filteredProviderID: String? = nil) throws -> Data {
+        try LocalAPIPayloadBuilder.mcpSnapshotJSON(providers: providers, filteredProviderID: filteredProviderID)
     }
 
-    func paceJSON(providerID: String) -> Data {
+    func paceJSON(providerID: String) throws -> Data {
         guard let provider = providers.first(where: { $0.id == providerID }) else {
             return Data(#"{"error":"provider_not_found"}"#.utf8)
         }
-        return LocalAPIPayloadBuilder.paceJSON(provider: provider, recommendation: insightText())
-    }
-
-    func statusBarText() -> String {
-        switch statusBarContent {
-        case .iconOnly:
-            return ""
-        case .customText:
-            return customStatusText.isEmpty ? "TokenBar" : customStatusText
-        case .guardDecision:
-            return "\(currentDecision.status.rawValue.uppercased()) \(currentDecision.workspaceName)"
-        case .activeWorkspace:
-            guard let selectedWorkspace else { return "Workspace" }
-            return selectedWorkspace.dailyBudget > 0
-                ? "\(selectedWorkspace.name) $\(formatMoney(selectedWorkspace.spendToday))"
-                : selectedWorkspace.name
-        case .totalSpend:
-            return totalSpendMonth > 0 ? "$\(formatMoney(totalSpendMonth))" : "TokenBar"
-        case .sessionBudget:
-            return sessionBudget > 0 ? "$\(formatMoney(sessionSpend)) / $\(formatMoney(sessionBudget))" : "TokenBar"
-        }
-    }
-
-    func statusBarColor() -> NSColor {
-        switch statusBarContent {
-        case .guardDecision:
-            return policyStatus.nsColor
-        case .activeWorkspace:
-            return selectedWorkspace?.status.nsColor ?? .controlAccentColor
-        case .sessionBudget:
-            return budgetStatus.nsColor
-        case .totalSpend:
-            return mostUrgentProvider?.status.nsColor ?? .controlAccentColor
-        case .customText, .iconOnly:
-            return selectedProvider?.status.nsColor ?? .controlAccentColor
-        }
-    }
-
-    func statusBarSymbolName() -> String {
-        switch statusBarContent {
-        case .guardDecision:
-            return currentDecision.status.symbolName
-        case .activeWorkspace:
-            return "folder.badge.gearshape"
-        case .sessionBudget:
-            return budgetStatus.symbolName
-        case .totalSpend:
-            return mostUrgentProvider?.status.symbolName ?? "chart.line.uptrend.xyaxis"
-        case .customText:
-            return "sparkles"
-        case .iconOnly:
-            return selectedProvider?.status.symbolName ?? "chart.bar.fill"
-        }
-    }
-
-    func insightText() -> String {
-        if currentDecision.status == .block {
-            return language == .english
-            ? "Policy blocked this run. Fix the provider, model, or workspace budget before continuing."
-            : "策略已阻止本次运行。继续前请调整平台、模型或工作区预算。"
-        }
-
-        if currentDecision.status == .warn {
-            return language == .english
-            ? currentDecision.recommendation
-            : "当前运行有预算或策略风险，建议切换到更便宜的模型或拆分任务。"
-        }
-
-        if budgetStatus == .critical {
-            return language == .english
-            ? "Session budget is already spent. Pause agent runs or switch to a lower-cost model."
-            : "会话预算已经用完。建议暂停 Agent 批量任务，或切换到低成本模型。"
-        }
-
-        if let urgent = mostUrgentProvider, urgent.status != .healthy {
-            if let alert = urgent.displayHealthAlert {
-                return language == .english
-                ? "\(urgent.name) is \(alert.status.rawValue): \(alert.detail)"
-                : "\(urgent.name) \(alert.status == .critical ? "严重" : "警告")：\(alert.detail)"
-            }
-            let hours = urgent.predictedExhaustion.map { max($0.timeIntervalSinceNow / 3600, 0) } ?? 0
-            return language == .english
-            ? "\(urgent.name) is trending hot. At the current pace it may run out in \(String(format: "%.1f", hours))h."
-            : "\(urgent.name) 消耗偏快。按当前速度约 \(String(format: "%.1f", hours)) 小时后可能耗尽。"
-        }
-
-        return language == .english
-        ? "Usage is within budget. Keep total spend in the menu bar for broad monitoring, or pin a provider during focused work."
-        : "当前使用量在预算内。日常可显示总花费，专注工作时可固定某个平台。"
-    }
-
-    func formatMoney(_ value: Double) -> String {
-        String(format: "%.2f", value)
-    }
-
-    func applySelectedAppIcon() {
-        guard let image = NSImage(named: selectedAppIcon.assetName) else { return }
-        NSApplication.shared.applicationIconImage = image
-    }
-
-    func shortCountdown(to date: Date) -> String {
-        let seconds = max(date.timeIntervalSinceNow, 0)
-        if seconds < 3600 {
-            return "\(Int(seconds / 60))m"
-        }
-        if seconds < 86_400 {
-            return "\(Int(seconds / 3600))h"
-        }
-        return "\(Int(seconds / 86_400))d"
+        return try LocalAPIPayloadBuilder.paceJSON(provider: provider, recommendation: insightText())
     }
 
     private func savePreferencesAndNotify() {
@@ -1023,7 +764,7 @@ final class AppState: ObservableObject {
             selectedModel = preferredModel
         }
         if hasExplicitSelectedAgentPreference == false {
-            selectedAgent = defaultAgent(providerID: selectedProviderID)
+            selectedAgent = AgentProvider.defaultAgent(forProviderID: selectedProviderID)
         }
         if sessionBudget <= 0 {
             sessionSpend = 0
@@ -1092,373 +833,25 @@ final class AppState: ObservableObject {
         currentDecision = evaluatePolicy(input: currentPolicyInput, shouldRecord: false)
     }
 
-    private func apply(
-        openAIResult: OpenAIUsageRefreshResult,
-        anthropicResult: AnthropicUsageRefreshResult,
-        openRouterResult: OpenRouterCreditsRefreshResult,
-        codexResult: CodexUsageRefreshResult,
-        miniMaxResult: MiniMaxUsageRefreshResult,
-        ccSwitchResult: CCSwitchUsageRefreshResult
-    ) {
-        defer {
-            lastRefresh = .now
-            isRefreshingUsage = false
-            currentDecision = evaluatePolicy(input: currentPolicyInput, shouldRecord: false)
-            persistProviders()
-            if CommandLine.arguments.contains("--tokenbar-verify-local-api") == false,
-               CommandLine.arguments.contains("--tokenbar-verify-minimax-ccswitch-fallback-audit") == false {
-                NotificationService.shared.notifyIfNeeded(appState: self)
-            }
-            notifyStatusBarUpdate()
-        }
-
-        applyOpenAIResult(openAIResult)
-        applyAnthropicResult(anthropicResult)
-        applyOpenRouterResult(openRouterResult)
-        applyCodexResult(codexResult)
-        applyCCSwitchResult(ccSwitchResult)
-        applyMiniMaxResult(miniMaxResult)
-    }
-
-    private func applyOpenAIResult(_ result: OpenAIUsageRefreshResult) {
-        ensureOpenAIProviderExists()
-        guard let index = providers.firstIndex(where: { $0.id == "openai" }) else { return }
-
-        switch result {
-        case .success(let snapshot):
-            providers[index].apply(snapshot: snapshot)
-            addAudit(provider: "OpenAI", action: "usage.live", detail: "Fetched \(Int(snapshot.tokenTotal)) tokens, \(snapshot.requestCountMonth) requests, and \(snapshot.currency.uppercased()) \(formatMoney(snapshot.spendMonth)) month-to-date")
-        case .unavailable(let detail):
-            providers[index].markSource(.liveUnavailable, detail: detail, clearUsage: true)
-            addAudit(provider: "OpenAI", action: "usage.needs_key", detail: "Live usage refresh skipped because no admin key is available")
-        case .failure(let detail):
-            providers[index].markSource(.error, detail: detail)
-            addAudit(provider: "OpenAI", action: "usage.error", detail: detail)
-        }
-    }
-
-    private func applyAnthropicResult(_ result: AnthropicUsageRefreshResult) {
-        ensureAnthropicProviderExists()
-        guard let index = providers.firstIndex(where: { $0.id == "anthropic" }) else { return }
-
-        switch result {
-        case .success(let snapshot):
-            providers[index].apply(snapshot: snapshot)
-            addAudit(provider: "Anthropic", action: "usage.live", detail: "Fetched \(Int(snapshot.tokenTotal)) tokens and \(snapshot.currency.uppercased()) \(formatMoney(snapshot.spendMonth)) month-to-date")
-        case .unavailable(let detail):
-            providers[index].markSource(.liveUnavailable, detail: detail, clearUsage: true)
-            addAudit(provider: "Anthropic", action: "usage.needs_key", detail: "Live usage refresh skipped because no Anthropic Admin API key is available")
-        case .failure(let detail):
-            providers[index].markSource(.error, detail: detail)
-            addAudit(provider: "Anthropic", action: "usage.error", detail: detail)
-        }
-    }
-
-    private func applyOpenRouterResult(_ result: OpenRouterCreditsRefreshResult) {
-        ensureOpenRouterProviderExists()
-        guard let index = providers.firstIndex(where: { $0.id == "openrouter" }) else { return }
-
-        switch result {
-        case .success(let snapshot):
-            providers[index].apply(snapshot: snapshot)
-            addAudit(provider: "OpenRouter", action: "credits.live", detail: "Fetched \(formatMoney(snapshot.totalUsage)) used of \(formatMoney(snapshot.totalCredits)) credits")
-        case .unavailable(let detail):
-            providers[index].markSource(.liveUnavailable, detail: detail, clearUsage: true)
-            addAudit(provider: "OpenRouter", action: "credits.needs_key", detail: "Live credits refresh skipped because no OpenRouter API key is available")
-        case .failure(let detail):
-            providers[index].markSource(.error, detail: detail)
-            addAudit(provider: "OpenRouter", action: "credits.error", detail: detail)
-        }
-    }
-
-    private func applyCodexResult(_ result: CodexUsageRefreshResult) {
-        ensureCodexProviderExists()
-        guard let index = providers.firstIndex(where: { $0.id == "codex" }) else { return }
-
-        switch result {
-        case .success(let snapshot):
-            providers[index].apply(snapshot: snapshot)
-            let primaryLabel = quotaWindowLabel(seconds: snapshot.primaryWindowSeconds, fallback: "5-hour")
-            let secondary = snapshot.secondaryUsedPercent.map {
-                ", \(quotaWindowLabel(seconds: snapshot.secondaryWindowSeconds, fallback: "7-day")) \(Int($0))%"
-            } ?? ""
-            addAudit(provider: "Codex", action: "quota.live", detail: "Fetched Codex quota: \(primaryLabel) \(Int(snapshot.primaryUsedPercent))%\(secondary)")
-        case .unavailable(let detail):
-            if providers[index].sourceKind != .localAgent {
-                providers[index].markSource(.liveUnavailable, detail: detail, clearUsage: true)
-            }
-            addAudit(provider: "Codex", action: "quota.needs_auth", detail: "Codex quota refresh skipped because no local Codex auth is available")
-        case .failure(let detail):
-            providers[index].markSource(.error, detail: detail)
-            addAudit(provider: "Codex", action: "quota.error", detail: detail)
-        }
-    }
-
-    private func applyMiniMaxResult(_ result: MiniMaxUsageRefreshResult) {
-        ensureMiniMaxProviderExists()
-        guard let index = providers.firstIndex(where: { $0.id == "minimax" }) else { return }
-
-        switch result {
-        case .success(let snapshot):
-            if providers[index].sourceKind != .ccSwitch {
-                providers[index].apply(snapshot: snapshot)
-            } else {
-                providers[index].sourceDetail = "\(providers[index].sourceDescription) MiniMax Token Plan quota also refreshed: current \(snapshot.intervalWindowLabel) \(Int(snapshot.intervalUsedPercent))% used, weekly \(snapshot.weeklyWindowLabel) \(Int(snapshot.weeklyUsedPercent))% used."
-                providers[index].sourceUpdatedAt = snapshot.fetchedAt
-            }
-            addAudit(provider: "MiniMax", action: "quota.live", detail: "Fetched MiniMax Token Plan quota: current \(Int(snapshot.intervalUsedPercent))%, weekly \(Int(snapshot.weeklyUsedPercent))%")
-        case .unavailable(let detail):
-            let hasCCSwitchQuotaFallback = MiniMaxQuotaAuditSemantics.hasCCSwitchQuotaFallback(
-                sourceKindRawValue: providers[index].sourceKind.rawValue,
-                unit: providers[index].unit,
-                hasKnownQuotaLimit: providers[index].hasKnownQuotaLimit
-            )
-            let audit = MiniMaxQuotaAuditSemantics.unavailableAudit(hasCCSwitchQuotaFallback: hasCCSwitchQuotaFallback)
-            if hasCCSwitchQuotaFallback == false {
-                providers[index].markSource(.liveUnavailable, detail: detail, clearUsage: true)
-            }
-            addAudit(provider: "MiniMax", action: audit.action, detail: audit.detail)
-        case .failure(let detail):
-            if providers[index].sourceKind != .ccSwitch {
-                providers[index].markSource(.error, detail: detail)
-            }
-            addAudit(provider: "MiniMax", action: "quota.error", detail: detail)
-        }
-    }
-
-    private func applyCCSwitchResult(_ result: CCSwitchUsageRefreshResult) {
-        switch result {
-        case .success(let snapshot):
-            for providerSnapshot in snapshot.providers {
-                ensureProviderExists(providerID: providerSnapshot.providerID)
-                if let index = providers.firstIndex(where: { $0.id == providerSnapshot.providerID }) {
-                    providers[index].name = providerSnapshot.displayName
-                    providers[index].category = providerSnapshot.category
-                    providers[index].symbolName = providerSnapshot.symbolName
-                    providers[index].apply(snapshot: providerSnapshot)
-                }
-            }
-            addAudit(provider: "CC Switch", action: "usage.local", detail: "Loaded \(snapshot.providers.count) provider rollups from CC Switch")
-        case .unavailable(let detail):
-            addAudit(provider: "CC Switch", action: "usage.unavailable", detail: detail)
-        case .failure(let detail):
-            addAudit(provider: "CC Switch", action: "usage.error", detail: detail)
-        }
-    }
-
-    private func quotaWindowLabel(seconds: TimeInterval?, fallback: String) -> String {
-        guard let seconds, seconds > 0 else { return fallback }
-        if seconds >= 86_400 {
-            let days = max(Int(round(seconds / 86_400)), 1)
-            return days == 1 ? "1-day" : "\(days)-day"
-        }
-        if seconds >= 3_600 {
-            let hours = max(Int(round(seconds / 3_600)), 1)
-            return hours == 1 ? "1-hour" : "\(hours)-hour"
-        }
-        let minutes = max(Int(round(seconds / 60)), 1)
-        return minutes == 1 ? "1-minute" : "\(minutes)-minute"
-    }
-
-    private func ensureOpenAIProviderExists() {
-        guard providers.contains(where: { $0.id == "openai" }) == false else { return }
-        providers.insert(AppSeedData.provider(
-            id: "openai",
-            name: "OpenAI",
-            category: "AI & API",
-            symbol: "brain.head.profile",
-            current: 0,
-            limit: 0,
-            unit: "tokens",
-            spendToday: 0,
-            spendMonth: 0,
-            resetHours: 24 * 30,
-            dataSource: .liveUnavailable,
-            sourceDetail: "OpenAI live usage requires OPENAI_ADMIN_KEY in Keychain or the app environment."
-        ), at: 0)
-    }
-
-    private func ensureAnthropicProviderExists() {
-        guard providers.contains(where: { $0.id == "anthropic" }) == false else { return }
-        providers.insert(AppSeedData.provider(
-            id: "anthropic",
-            name: "Anthropic",
-            category: "AI & API",
-            symbol: "sparkles",
-            current: 0,
-            limit: 0,
-            unit: "tokens",
-            spendToday: 0,
-            spendMonth: 0,
-            resetHours: 24 * 30,
-            dataSource: .liveUnavailable,
-            sourceDetail: "Anthropic live usage requires ANTHROPIC_ADMIN_KEY in Keychain or the app environment. Use an Admin API key that starts with sk-ant-admin."
-        ), at: min(providers.count, 1))
-    }
-
-    private func ensureOpenRouterProviderExists() {
-        guard providers.contains(where: { $0.id == "openrouter" }) == false else { return }
-        providers.insert(AppSeedData.provider(
-            id: "openrouter",
-            name: "OpenRouter",
-            category: "AI & API",
-            symbol: "point.3.connected.trianglepath.dotted",
-            current: 0,
-            limit: 0,
-            unit: "credits",
-            spendToday: 0,
-            spendMonth: 0,
-            resetHours: 24 * 30,
-            dataSource: .liveUnavailable,
-            sourceDetail: "OpenRouter live credits require OPENROUTER_API_KEY in Keychain or the app environment."
-        ), at: min(providers.count, 2))
-    }
-
-    private func ensureCodexProviderExists() {
-        guard providers.contains(where: { $0.id == "codex" }) == false else { return }
-        providers.insert(AppSeedData.provider(
-            id: "codex",
-            name: "Codex",
-            category: "AI Tool",
-            symbol: "terminal.fill",
-            current: 0,
-            limit: 100,
-            unit: "percent",
-            spendToday: 0,
-            spendMonth: 0,
-            resetHours: 5,
-            dataSource: .liveUnavailable,
-            sourceDetail: "Codex login quota requires ~/.codex/auth.json from a signed-in Codex session."
-        ), at: min(providers.count, 3))
-    }
-
-    private func ensureMiniMaxProviderExists() {
-        guard providers.contains(where: { $0.id == "minimax" }) == false else { return }
-        providers.insert(AppSeedData.provider(
-            id: "minimax",
-            name: "MiniMax",
-            category: "AI & API",
-            symbol: "bolt.horizontal.circle.fill",
-            current: 0,
-            limit: 0,
-            unit: "percent",
-            spendToday: 0,
-            spendMonth: 0,
-            resetHours: 24 * 30,
-            dataSource: .liveUnavailable,
-            sourceDetail: "MiniMax Token Plan quota requires MINIMAX_API_KEY in Keychain or the app environment."
-        ), at: min(providers.count, 4))
-    }
-
     private func applyLocalAgentUsage(_ input: LocalAgentUsageIngest) -> LocalAgentUsageAppliedSnapshot {
-        let now = input.occurredAt ?? .now
-        let providerID = normalizedProviderID(input.providerID, model: input.model, agent: input.agent)
-        let agent = input.agent ?? defaultAgent(providerID: providerID)
-        let model = normalizedModel(input.model, providerID: providerID)
-        let workspaceID = upsertWorkspacePolicy(from: input, providerID: providerID)
-        normalizeWorkspaceSpendBuckets()
-        ensureProviderExists(providerID: providerID)
-
-        let contextTokenTotal = Double(input.totalTokens ?? ((input.inputTokens ?? 0) + (input.outputTokens ?? 0)))
-        let cumulativeCost = max(input.costUSD ?? 0, 0)
-        let cumulativeRequests = max(input.requestCount ?? 0, 0)
-        let sessionKey = localUsageSessionKey(input: input, agent: agent, providerID: providerID, model: model, workspaceID: workspaceID)
-        let isCumulative = input.cumulative ?? true
-        let delta = isCumulative
-            ? localAgentUsageLedgerStore.apply(
-                sessionKey: sessionKey,
-                cumulativeCost: cumulativeCost,
-                cumulativeTokens: contextTokenTotal,
-                cumulativeRequestCount: cumulativeRequests,
-                now: now
-            )
-            : LocalAgentUsageDelta(costUSD: cumulativeCost, tokens: contextTokenTotal, requestCount: cumulativeRequests)
-        let detail = localUsageSourceDetail(input: input, providerID: providerID, costDelta: delta.costUSD, tokenDelta: delta.tokens)
-        let snapshot = LocalAgentUsageAppliedSnapshot(
-            agent: agent,
-            providerID: providerID,
-            model: model,
-            workspaceID: workspaceID,
-            sessionKey: sessionKey,
-            sourceName: input.source ?? "local_agent",
-            costDelta: delta.costUSD,
-            tokenDelta: delta.tokens,
-            requestDelta: delta.requestCount,
-            contextTokenTotal: contextTokenTotal,
-            contextWindowSize: input.contextWindowSize.map(Double.init),
-            rateLimitUsedPercentage: input.rateLimitUsedPercentage,
-            rateLimitResetAt: input.rateLimitResetAt,
-            occurredAt: now,
-            sourceDetail: detail
+        let outcome = localUsageIngestionModule.ingest(
+            input,
+            providers: providers,
+            workspacePolicies: workspacePolicies,
+            selectedWorkspaceID: selectedWorkspaceID,
+            selectedProviderID: selectedProviderID,
+            sessionBudget: sessionBudget,
+            sessionSpend: sessionSpend
         )
-
-        if let providerIndex = providers.firstIndex(where: { $0.id == providerID }) {
-            providers[providerIndex].apply(localUsage: snapshot)
-        }
-        if let workspaceID, let workspaceIndex = workspacePolicies.firstIndex(where: { $0.id == workspaceID }) {
-            workspacePolicies[workspaceIndex].spendToday += delta.costUSD
-            workspacePolicies[workspaceIndex].spendMonth += delta.costUSD
-        }
-        if sessionBudget > 0 {
-            sessionSpend += delta.costUSD
-        }
-        addAudit(
-            provider: agent.displayName,
-            action: "usage.local",
-            detail: "\(model) · \(providerID) · +$\(formatMoney(delta.costUSD)) · +\(Int(delta.tokens)) tokens"
-        )
-        mergeModelUsageRollups(localModelUsageStore.apply(snapshot: snapshot))
+        providers = outcome.providers
+        workspacePolicies = outcome.workspacePolicies
+        sessionSpend = outcome.sessionSpend
+        addAudit(provider: outcome.audit.provider, action: outcome.audit.action, detail: outcome.audit.detail)
+        mergeModelUsageRollups(outcome.modelUsageRollups)
         persistProviders()
         persistWorkspacePolicies()
         notifyStatusBarUpdate()
-        return snapshot
-    }
-
-    private func upsertWorkspacePolicy(from input: LocalAgentUsageIngest, providerID: String) -> String? {
-        let workspaceID = input.workspaceID ?? workspaceIDMatching(path: input.currentDirectory ?? input.workspacePath)
-        guard let workspaceID, workspaceID.isEmpty == false else { return selectedWorkspaceID }
-
-        if let index = workspacePolicies.firstIndex(where: { $0.id == workspaceID }) {
-            workspacePolicies[index].name = input.workspaceName ?? workspacePolicies[index].name
-            workspacePolicies[index].pathHint = input.workspacePath ?? input.currentDirectory ?? workspacePolicies[index].pathHint
-            workspacePolicies[index].client = input.workspaceClient ?? workspacePolicies[index].client
-            workspacePolicies[index].dailyBudget = input.dailyBudget ?? workspacePolicies[index].dailyBudget
-            workspacePolicies[index].monthlyBudget = input.monthlyBudget ?? workspacePolicies[index].monthlyBudget
-            workspacePolicies[index].maxEstimatedRunCost = input.maxEstimatedRunCost ?? workspacePolicies[index].maxEstimatedRunCost
-            workspacePolicies[index].maxEstimatedTokens = input.maxEstimatedTokens ?? workspacePolicies[index].maxEstimatedTokens
-            workspacePolicies[index].allowedProviderIDs = input.allowedProviderIDs ?? workspacePolicies[index].allowedProviderIDs
-            workspacePolicies[index].blockedModels = input.blockedModels ?? workspacePolicies[index].blockedModels
-            workspacePolicies[index].requireCompanyKey = input.requireCompanyKey ?? workspacePolicies[index].requireCompanyKey
-            workspacePolicies[index].preferredProviderID = workspacePolicies[index].preferredProviderID ?? providerID
-            workspacePolicies[index].preferredModel = workspacePolicies[index].preferredModel ?? normalizedModel(input.model, providerID: providerID)
-        } else {
-            var allowedProviderIDs = ["anthropic", "openai", "openrouter"]
-            if allowedProviderIDs.contains(providerID) == false {
-                allowedProviderIDs.append(providerID)
-            }
-            workspacePolicies.append(WorkspacePolicy(
-                id: workspaceID,
-                name: input.workspaceName ?? titleFromWorkspaceID(workspaceID),
-                pathHint: input.workspacePath ?? input.currentDirectory ?? "~",
-                client: input.workspaceClient ?? "local",
-                dailyBudget: input.dailyBudget ?? 0,
-                monthlyBudget: input.monthlyBudget ?? 0,
-                spendToday: 0,
-                spendMonth: 0,
-                allowedProviderIDs: input.allowedProviderIDs ?? allowedProviderIDs,
-                blockedModels: input.blockedModels ?? [],
-                maxEstimatedRunCost: input.maxEstimatedRunCost ?? 0,
-                maxEstimatedTokens: input.maxEstimatedTokens ?? 0,
-                requireCompanyKey: input.requireCompanyKey ?? false,
-                preferredProviderID: providerID,
-                preferredModel: normalizedModel(input.model, providerID: providerID),
-                setupSourceDetail: "Created from local agent usage ingestion.",
-                configuredModelCount: nil,
-                inferredFromPaths: [input.transcriptPath, input.currentDirectory].compactMap { $0 }
-            ))
-        }
-
-        return workspaceID
+        return outcome.snapshot
     }
 
     private func workspacePoliciesForPolicyEvaluation(_ input: PolicyEvaluationInput) -> [WorkspacePolicy] {
@@ -1509,129 +902,25 @@ final class AppState: ObservableObject {
 
     private func ensureProviderExists(providerID: String) {
         guard providers.contains(where: { $0.id == providerID }) == false else { return }
-        switch providerID {
-        case "openai":
-            ensureOpenAIProviderExists()
-        case "anthropic":
-            ensureAnthropicProviderExists()
-        case "openrouter":
-            ensureOpenRouterProviderExists()
-        case "codex":
-            ensureCodexProviderExists()
-        case "minimax":
-            ensureMiniMaxProviderExists()
-        case "deepseek":
-            providers.append(AppSeedData.provider(
-                id: "deepseek",
-                name: "DeepSeek",
-                category: "AI & API",
-                symbol: "scope",
-                current: 0,
-                limit: 0,
-                unit: "tokens",
-                spendToday: 0,
-                spendMonth: 0,
-                resetHours: 24 * 30,
-                dataSource: .liveUnavailable,
-                sourceDetail: "DeepSeek balance can be read from CC Switch config when present; TokenBar does not persist keys imported from CC Switch."
-            ))
-        case "xiaomi-mimo":
-            providers.append(AppSeedData.provider(
-                id: "xiaomi-mimo",
-                name: "Xiaomi MiMo",
-                category: "AI & API",
-                symbol: "waveform.path.ecg",
-                current: 0,
-                limit: 0,
-                unit: "tokens",
-                spendToday: 0,
-                spendMonth: 0,
-                resetHours: 24 * 30,
-                dataSource: .unsupported,
-                sourceDetail: "Xiaomi MiMo usage is available from CC Switch local proxy rollups when present."
-            ))
-        default:
-            providers.append(AppSeedData.provider(
-                id: providerID,
-                name: titleFromWorkspaceID(providerID),
-                category: "AI & API",
-                symbol: "network",
-                current: 0,
-                limit: 0,
-                unit: "tokens",
-                spendToday: 0,
-                spendMonth: 0,
-                resetHours: 24 * 30,
-                dataSource: .localAgent,
-                sourceDetail: "Local agent usage was ingested through TokenBar's local API."
-            ))
+        if let seed = AppSeedData.providers().first(where: { $0.id == providerID }) {
+            let seedOrder = AppSeedData.providers().firstIndex(where: { $0.id == providerID }) ?? providers.count
+            providers.insert(seed, at: min(seedOrder, providers.count))
+            return
         }
-    }
-
-    private func normalizedProviderID(_ providerID: String?, model: String?, agent: AgentProvider?) -> String {
-        let provider = providerID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if let provider, provider.isEmpty == false { return provider }
-        let model = model?.lowercased() ?? ""
-        if model.contains("claude") { return "anthropic" }
-        if model.contains("gpt") || model.contains("o1") || model.contains("o3") || model.contains("o4") { return "openai" }
-        if model.contains("minimax") { return "minimax" }
-        if model.contains("deepseek") { return "deepseek" }
-        if model.contains("gemini") { return "google" }
-        if model.contains("mistral") { return "mistral" }
-        if model.contains("kimi") { return "kimi" }
-        if model.contains("mimo") || model.contains("xiaomi") { return "xiaomi-mimo" }
-        if model.contains("glm") { return "glm" }
-        if model.contains("qwen") { return "qwen" }
-        switch agent {
-        case .claudeCode:
-            return "anthropic"
-        case .codex:
-            return "openai"
-        default:
-            return selectedProviderID
-        }
-    }
-
-    private func defaultAgent(providerID: String) -> AgentProvider {
-        switch providerID {
-        case "anthropic":
-            return .claudeCode
-        case "openai":
-            return .codex
-        default:
-            return .custom
-        }
-    }
-
-    private func normalizedModel(_ model: String?, providerID: String) -> String {
-        let value = model?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if value.isEmpty == false { return value }
-        switch providerID {
-        case "anthropic": return "claude-sonnet"
-        case "openai": return "gpt-5"
-        case "minimax": return "minimax-m1"
-        case "deepseek": return "deepseek-chat"
-        case "google": return "gemini-2.5-pro"
-        case "mistral": return "mistral-large-latest"
-        case "kimi": return "kimi-k2"
-        case "glm": return "glm-4.5"
-        default: return "unspecified"
-        }
-    }
-
-    private func localUsageSessionKey(input: LocalAgentUsageIngest, agent: AgentProvider, providerID: String, model: String, workspaceID: String?) -> String {
-        if let sessionID = input.sessionID, sessionID.isEmpty == false { return sessionID }
-        if let transcriptPath = input.transcriptPath, transcriptPath.isEmpty == false { return transcriptPath }
-        return [agent.rawValue, providerID, model, workspaceID ?? "workspace", input.currentDirectory ?? ""].joined(separator: "|")
-    }
-
-    private func workspaceIDMatching(path: String?) -> String? {
-        guard let path, path.isEmpty == false else { return nil }
-        let expanded = NSString(string: path).expandingTildeInPath
-        return workspacePolicies.first { policy in
-            let policyPath = NSString(string: policy.pathHint).expandingTildeInPath
-            return expanded.hasPrefix(policyPath) || policyPath.hasPrefix(expanded)
-        }?.id
+        providers.append(AppSeedData.provider(
+            id: providerID,
+            name: titleFromWorkspaceID(providerID),
+            category: "AI & API",
+            symbol: "network",
+            current: 0,
+            limit: 0,
+            unit: "tokens",
+            spendToday: 0,
+            spendMonth: 0,
+            resetHours: 24 * 30,
+            dataSource: .localAgent,
+            sourceDetail: "Local agent usage was ingested through TokenBar's local API."
+        ))
     }
 
     private func titleFromWorkspaceID(_ value: String) -> String {
@@ -1642,23 +931,8 @@ final class AppState: ObservableObject {
         }.joined(separator: " ")
     }
 
-    private func localUsageSourceDetail(input: LocalAgentUsageIngest, providerID: String, costDelta: Double, tokenDelta: Double) -> String {
-        let source = input.source ?? "local agent"
-        var parts = ["\(source) usage ingested locally for \(providerID)."]
-        if input.contextWindowSize != nil {
-            parts.append("Context tokens are from the local session; provider billing still belongs to the provider console.")
-        } else {
-            parts.append("Token and cost totals are local agent data, not a provider-admin usage API.")
-        }
-        parts.append("Applied +$\(formatMoney(costDelta)) and +\(Int(tokenDelta)) tokens after session de-duplication.")
-        if let rateLimitUsedPercentage = input.rateLimitUsedPercentage {
-            parts.append("Reported rate-limit use: \(Int(rateLimitUsedPercentage))%.")
-        }
-        return parts.joined(separator: " ")
-    }
-
     private func reloadModelUsageRollups() {
-        mergeModelUsageRollups(localModelUsageStore.load())
+        mergeModelUsageRollups(localUsageIngestionModule.loadModelUsageRollups())
     }
 
     private func reloadModelCatalogFromLocalSources() {
@@ -1744,119 +1018,6 @@ final class AppState: ObservableObject {
         default:
             return [providerID]
         }
-    }
-
-    private static func claudeStatuslineInput(from data: Data) -> LocalAgentUsageIngest? {
-        guard let object = try? JSONSerialization.jsonObject(with: data) else { return nil }
-        let model = nestedString(object, path: ["model", "id"])
-            ?? nestedString(object, path: ["model", "name"])
-            ?? stringValue(forAnyKey: ["model_id", "modelId", "model"], in: object)
-        let inputTokens = intValue(forAnyKey: ["input_tokens", "inputTokens"], in: object)
-        let outputTokens = intValue(forAnyKey: ["output_tokens", "outputTokens"], in: object)
-        let cacheCreationTokens = intValue(forAnyKey: ["cache_creation_input_tokens", "cacheCreationInputTokens"], in: object) ?? 0
-        let cacheReadTokens = intValue(forAnyKey: ["cache_read_input_tokens", "cacheReadInputTokens"], in: object) ?? 0
-        let explicitTotalTokens = intValue(forAnyKey: ["total_tokens", "totalTokens", "tokens_used", "tokensUsed"], in: object)
-        let computedTotalTokens = [inputTokens, outputTokens].compactMap { $0 }.reduce(0, +) + cacheCreationTokens + cacheReadTokens
-        let totalTokens = explicitTotalTokens ?? (computedTotalTokens > 0 ? computedTotalTokens : nil)
-        let sessionID = stringValue(forAnyKey: ["session_id", "sessionId"], in: object)
-        let transcriptPath = stringValue(forAnyKey: ["transcript_path", "transcriptPath"], in: object)
-        let currentDirectory = nestedString(object, path: ["workspace", "current_dir"])
-            ?? nestedString(object, path: ["workspace", "currentDirectory"])
-            ?? stringValue(forAnyKey: ["current_dir", "currentDirectory", "cwd"], in: object)
-
-        return LocalAgentUsageIngest(
-            agent: .claudeCode,
-            providerID: nil,
-            model: model,
-            workspaceID: nil,
-            workspaceName: nil,
-            workspacePath: currentDirectory,
-            workspaceClient: nil,
-            dailyBudget: nil,
-            monthlyBudget: nil,
-            maxEstimatedRunCost: nil,
-            maxEstimatedTokens: nil,
-            allowedProviderIDs: nil,
-            blockedModels: nil,
-            requireCompanyKey: nil,
-            sessionID: sessionID,
-            source: "Claude Code statusline",
-            currentDirectory: currentDirectory,
-            transcriptPath: transcriptPath,
-            costUSD: doubleValue(forAnyKey: ["total_cost_usd", "totalCostUSD", "cost_usd", "costUSD"], in: object),
-            inputTokens: inputTokens,
-            outputTokens: outputTokens,
-            totalTokens: totalTokens,
-            contextWindowSize: intValue(forAnyKey: ["context_window_size", "contextWindowSize"], in: object),
-            requestCount: intValue(forAnyKey: ["request_count", "requestCount"], in: object),
-            occurredAt: dateValue(forAnyKey: ["timestamp", "occurred_at", "occurredAt"], in: object),
-            rateLimitUsedPercentage: doubleValue(forAnyKey: ["used_percentage", "usedPercentage", "rate_limit_used_percentage", "rateLimitUsedPercentage"], in: object),
-            rateLimitResetAt: dateValue(forAnyKey: ["reset_at", "resetAt", "rate_limit_reset_at", "rateLimitResetAt"], in: object),
-            cumulative: true
-        )
-    }
-
-    private static func nestedString(_ object: Any, path: [String]) -> String? {
-        var cursor = object
-        for key in path {
-            guard let dictionary = cursor as? [String: Any], let next = dictionary[key] else { return nil }
-            cursor = next
-        }
-        return cursor as? String
-    }
-
-    private static func stringValue(forAnyKey keys: [String], in object: Any) -> String? {
-        guard let value = firstValue(forAnyKey: keys, in: object) else { return nil }
-        if let string = value as? String { return string.isEmpty ? nil : string }
-        return "\(value)"
-    }
-
-    private static func intValue(forAnyKey keys: [String], in object: Any) -> Int? {
-        guard let value = firstValue(forAnyKey: keys, in: object) else { return nil }
-        if let int = value as? Int { return int }
-        if let double = value as? Double { return Int(double) }
-        if let string = value as? String { return Int(string) }
-        return nil
-    }
-
-    private static func doubleValue(forAnyKey keys: [String], in object: Any) -> Double? {
-        guard let value = firstValue(forAnyKey: keys, in: object) else { return nil }
-        if let double = value as? Double { return double }
-        if let int = value as? Int { return Double(int) }
-        if let string = value as? String { return Double(string) }
-        return nil
-    }
-
-    private static func dateValue(forAnyKey keys: [String], in object: Any) -> Date? {
-        guard let value = firstValue(forAnyKey: keys, in: object) else { return nil }
-        if let date = value as? Date { return date }
-        if let seconds = value as? TimeInterval { return Date(timeIntervalSince1970: seconds) }
-        guard let string = value as? String else { return nil }
-        if let date = ISO8601DateFormatter().date(from: string) { return date }
-        if let seconds = TimeInterval(string) { return Date(timeIntervalSince1970: seconds) }
-        return nil
-    }
-
-    private static func firstValue(forAnyKey keys: [String], in object: Any) -> Any? {
-        if let dictionary = object as? [String: Any] {
-            for key in keys {
-                if let value = dictionary[key] {
-                    return value
-                }
-            }
-            for value in dictionary.values {
-                if let found = firstValue(forAnyKey: keys, in: value) {
-                    return found
-                }
-            }
-        } else if let array = object as? [Any] {
-            for value in array {
-                if let found = firstValue(forAnyKey: keys, in: value) {
-                    return found
-                }
-            }
-        }
-        return nil
     }
 
     private func usageSummary(id: String, title: String, multiplier: Double, requestDivisor: Double) -> UsageSummary {
@@ -1964,149 +1125,11 @@ final class AppState: ObservableObject {
     }
 
     func verifyWorkspaceBudgetPeriodsSmoke() throws {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
-        let now = try smokeDate(year: 2026, month: 7, day: 12, calendar: calendar)
-        var workspace = WorkspacePolicy(
-            id: "budget-smoke",
-            name: "Budget Smoke",
-            pathHint: "~",
-            client: "local",
-            dailyBudget: 10,
-            monthlyBudget: 20,
-            spendToday: 7,
-            spendMonth: 19,
-            spendDayKey: "2026-07-11",
-            spendMonthKey: "2026-06",
-            allowedProviderIDs: ["openai"],
-            blockedModels: [],
-            maxEstimatedRunCost: 0,
-            requireCompanyKey: false
-        )
-
-        guard workspace.resetExpiredSpendBuckets(now: now, calendar: calendar),
-              workspace.spendToday == 0,
-              workspace.spendMonth == 0,
-              workspace.spendDayKey == "2026-07-12",
-              workspace.spendMonthKey == "2026-07" else {
-            throw WorkspaceBudgetPeriodsSmokeFailure("Expired daily and monthly workspace spend was not reset.")
-        }
-
-        workspace.spendToday = 1
-        workspace.spendMonth = 19
-        let input = PolicyEvaluationInput(
-            agent: .codex,
-            workspaceID: workspace.id,
-            providerID: "openai",
-            model: "gpt-5",
-            estimatedCost: 2,
-            estimatedTokens: 0,
-            intent: "budget-smoke"
-        )
-        let decision = PolicyEngine.evaluate(
-            input: input,
-            workspaces: [workspace],
-            selectedWorkspace: workspace,
-            providers: [],
-            projectedSessionSpend: 2,
-            sessionBudget: 10
-        )
-        guard decision.status == .block, decision.projectedMonthlySpend == 21 else {
-            throw WorkspaceBudgetPeriodsSmokeFailure("Monthly workspace budget was not enforced.")
-        }
-
-        let alreadyAppliedDecision = PolicyEngine.evaluate(
-            input: PolicyEvaluationInput(
-                agent: .codex,
-                workspaceID: workspace.id,
-                providerID: "openai",
-                model: "gpt-5",
-                estimatedCost: 0,
-                estimatedTokens: 0,
-                intent: "usage-ingest-smoke"
-            ),
-            workspaces: [workspace],
-            selectedWorkspace: workspace,
-            providers: [],
-            projectedSessionSpend: 2,
-            sessionBudget: 10
-        )
-        guard alreadyAppliedDecision.projectedDailySpend == 1,
-              alreadyAppliedDecision.projectedMonthlySpend == 19 else {
-            throw WorkspaceBudgetPeriodsSmokeFailure("Applied local usage was counted again during policy evaluation.")
-        }
-
-        workspace.maxEstimatedTokens = 100
-        let tokenCapDecision = PolicyEngine.evaluate(
-            input: PolicyEvaluationInput(
-                agent: .codex,
-                workspaceID: workspace.id,
-                providerID: "openai",
-                model: "gpt-5",
-                estimatedCost: 0,
-                estimatedTokens: 101,
-                intent: "token-cap-smoke"
-            ),
-            workspaces: [workspace],
-            selectedWorkspace: workspace,
-            providers: [],
-            projectedSessionSpend: 0,
-            sessionBudget: 0
-        )
-        guard tokenCapDecision.status == .block,
-              tokenCapDecision.reasons.contains("Estimated run tokens are above the workspace token cap.") else {
-            throw WorkspaceBudgetPeriodsSmokeFailure("Workspace raw-token cap was not enforced.")
-        }
-
-        guard var provider = AppSeedData.providers().first(where: { $0.id == "openai" }) else {
-            throw WorkspaceBudgetPeriodsSmokeFailure("Could not construct provider source smoke data.")
-        }
-        provider.apply(localUsage: LocalAgentUsageAppliedSnapshot(
-            agent: .codex,
-            providerID: "openai",
-            model: "gpt-5",
-            workspaceID: workspace.id,
-            sessionKey: "provider-source-smoke",
-            sourceName: "smoke",
-            costDelta: 0.42,
-            tokenDelta: 12_000,
-            requestDelta: 1,
-            contextTokenTotal: 12_000,
-            contextWindowSize: 128_000,
-            rateLimitUsedPercentage: nil,
-            rateLimitResetAt: nil,
-            occurredAt: now,
-            sourceDetail: "smoke local usage"
-        ))
-        provider.apply(snapshot: OpenAIUsageSnapshot(
-            tokenTotal: 50_000,
-            tokenToday: 20_000,
-            requestCountMonth: 3,
-            requestCountToday: 2,
-            spendToday: 1.2,
-            spendMonth: 4.8,
-            currency: "usd",
-            resetAt: now.addingTimeInterval(86_400),
-            fetchedAt: now.addingTimeInterval(60),
-            history: []
-        ))
-        guard provider.sourceKind == .live,
-              provider.localAgentUsage?.spendToday == 0.42,
-              provider.localAgentUsage?.tokensToday == 12_000 else {
-            throw WorkspaceBudgetPeriodsSmokeFailure("Live refresh overwrote local agent usage.")
-        }
-    }
-
-    private func smokeDate(year: Int, month: Int, day: Int, calendar: Calendar) throws -> Date {
-        guard let date = calendar.date(from: DateComponents(year: year, month: month, day: day)) else {
-            throw WorkspaceBudgetPeriodsSmokeFailure("Could not construct the budget smoke-test date.")
-        }
-        return date
+        try WorkspaceBudgetPeriodsSmokeVerifier.verify()
     }
     #endif
 
 }
-
 #if DEBUG
 private struct MiniMaxCCSwitchFallbackAuditSmokeFailure: Error, CustomStringConvertible {
     var description: String
@@ -2116,27 +1139,7 @@ private struct MiniMaxCCSwitchFallbackAuditSmokeFailure: Error, CustomStringConv
     }
 }
 
-private struct WorkspaceBudgetPeriodsSmokeFailure: Error, CustomStringConvertible {
-    var description: String
-
-    init(_ description: String) {
-        self.description = description
-    }
-}
 #endif
-
-private struct SmartRoutingCandidate {
-    var providerID: String
-    var model: String
-    var sourceRank: Int
-}
-
-private struct ScoredSmartRoutingCandidate {
-    var candidate: SmartRoutingCandidate
-    var score: Double
-    var route: SmartRoutingRouteStats?
-    var estimatedCost: Double
-}
 
 private extension PolicyEvaluationInput {
     var hasTransientWorkspacePolicyFields: Bool {

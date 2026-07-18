@@ -23,9 +23,7 @@ struct AuditEventStore {
         case .missing:
             return Self.pruned(defaults, limit: limit)
         case .unreadable:
-            let cleanedDefaults = Self.pruned(defaults, limit: limit)
-            save(cleanedDefaults)
-            return cleanedDefaults
+            return Self.pruned(defaults, limit: limit)
         case .loaded(let events):
             saved = events
         }

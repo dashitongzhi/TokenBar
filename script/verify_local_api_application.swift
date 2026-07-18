@@ -26,9 +26,13 @@ private final class FakeLocalAPIState: LocalAPIApplicationState {
     private(set) var lastQuotaProviderID: String?
     private(set) var lastPaceProviderID: String?
     private(set) var evaluatedPolicyInput: PolicyEvaluationInput?
+    var shouldFailPolicyEncoding = false
 
-    func policyJSON() -> Data {
-        Data(#"{"kind":"policy"}"#.utf8)
+    func policyJSON() throws -> Data {
+        if shouldFailPolicyEncoding {
+            throw VerificationFailure(description: "fixture encoding failure")
+        }
+        return Data(#"{"kind":"policy"}"#.utf8)
     }
 
     func policyDecisionJSON(input: PolicyEvaluationInput) -> Data {
@@ -101,6 +105,15 @@ struct VerifyLocalAPIApplication {
             application.handle(request(method: "GET", path: "/quotas")).statusCode == 401,
             "protected routes must require a bearer token"
         )
+
+        state.shouldFailPolicyEncoding = true
+        let failedPolicy = application.handle(authorizedRequest(method: "GET", path: "/policy", token: token))
+        try expect(failedPolicy.statusCode == 500, "payload encoding failures must return HTTP 500")
+        try expect(
+            String(decoding: failedPolicy.body, as: UTF8.self).contains("payload_encoding_failed"),
+            "payload encoding failures must return an explicit error contract"
+        )
+        state.shouldFailPolicyEncoding = false
 
         let quotas = application.handle(authorizedRequest(method: "GET", path: "/quotas", token: token))
         try expect(quotas.statusCode == 200, "authorized quota request must succeed")

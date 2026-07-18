@@ -2,6 +2,7 @@
 dist/
 DerivedData/
 *.xcuserstate
+*.profraw
 .DS_Store
 
 # Local assistant/editor state.

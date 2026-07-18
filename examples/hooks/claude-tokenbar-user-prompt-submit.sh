@@ -2,9 +2,33 @@
 set -u
 
 INPUT="$(cat)"
-PROMPT="$(
-  ruby -rjson -e 'payload = JSON.parse(ARGF.read) rescue {}; puts((payload["prompt"] || payload["user_prompt"] || payload["message"] || payload["input"]).to_s)' <<<"$INPUT"
-)"
+
+block_invalid_input() {
+  local reason="$1"
+  ruby -rjson -e '
+    puts JSON.generate({
+      decision: "block",
+      reason: "TokenBar BLOCK: #{ARGV.fetch(0)}",
+      hookSpecificOutput: {
+        hookEventName: "UserPromptSubmit",
+        additionalContext: "TokenBar refused to evaluate an invalid Claude hook payload."
+      }
+    })
+  ' "$reason"
+  exit 0
+}
+
+if ! PROMPT="$(ruby -rjson -e '
+  payload = JSON.parse(STDIN.read)
+  prompt = payload["prompt"] || payload["user_prompt"] || payload["message"] || payload["input"]
+  raise KeyError, "missing prompt" if prompt.nil?
+  raise TypeError, "prompt must be a string" unless prompt.is_a?(String)
+  raise KeyError, "empty prompt" if prompt.strip.empty?
+  print prompt
+' <<<"$INPUT" 2>/dev/null)"; then
+  block_invalid_input "invalid hook JSON; refusing to run without a verified prompt."
+fi
+[[ -n "$PROMPT" ]] || block_invalid_input "hook payload has no prompt; refusing to run without a verified prompt."
 
 TOKENBAR_BIN="${TOKENBAR_BIN:-tokenbar}"
 PROVIDER="${TOKENBAR_PROVIDER:-anthropic}"

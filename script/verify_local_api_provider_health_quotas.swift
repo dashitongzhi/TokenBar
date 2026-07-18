@@ -107,6 +107,7 @@ private enum VerificationFailure: Error, CustomStringConvertible {
 }
 
 @main
+@MainActor
 private enum VerifyLocalAPIProviderHealthQuotas {
     static func main() throws {
         try verifyScenario(
@@ -157,7 +158,89 @@ private enum VerifyLocalAPIProviderHealthQuotas {
             expectedAlertTitle: "10 consecutive CC Switch failures"
         )
 
-        print("Verified local API /quotas provider-health warning and critical statuses.")
+        try verifyTypedNullContracts()
+
+        print("Verified typed local API wire contracts and provider-health quota statuses.")
+    }
+
+    private static func verifyTypedNullContracts() throws {
+        let decision = PolicyDecision(
+            timestamp: Date(timeIntervalSince1970: 1_700_000_000),
+            status: .allow,
+            agent: .codex,
+            workspaceID: "wire-contract",
+            workspaceName: "Wire Contract",
+            providerID: "openai",
+            model: "gpt-wire",
+            estimatedCost: 0.1,
+            projectedDailySpend: 0.1,
+            projectedMonthlySpend: 0.1,
+            reasons: ["fixture"],
+            recommendation: "continue",
+            fallbackProviderID: nil
+        )
+        let workspace = WorkspacePolicy(
+            id: "wire-contract",
+            name: "Wire Contract",
+            pathHint: "~",
+            client: "local",
+            dailyBudget: 0,
+            monthlyBudget: 0,
+            spendToday: 0,
+            spendMonth: 0,
+            allowedProviderIDs: ["openai"],
+            blockedModels: [],
+            maxEstimatedRunCost: 0,
+            requireCompanyKey: false
+        )
+        let policy = try expectDictionary(JSONSerialization.jsonObject(
+            with: try LocalAPIPayloadBuilder.policyJSON(currentDecision: decision, workspacePolicies: [workspace])
+        ))
+        let decisionPayload = try expectDictionary(policy["decision"])
+        try expect(decisionPayload["fallbackProvider"] is NSNull, "nil fallback provider must encode as JSON null")
+        try expect(decisionPayload["smartRouting"] is NSNull, "nil smart routing recommendation must encode as JSON null")
+        let workspaces = try expectArray(policy["workspaces"], "workspaces")
+        let workspacePayload = try expectDictionary(workspaces.first)
+        try expect(workspacePayload["spendDayKey"] is NSNull, "nil spend day key must encode as JSON null")
+        try expect(workspacePayload["preferredModel"] is NSNull, "nil preferred model must encode as JSON null")
+
+        let run = SmartRoutingRunRecord(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            recordedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            occurredAt: Date(timeIntervalSince1970: 1_700_000_000),
+            agent: .codex,
+            taskIntent: "wire",
+            providerID: "openai",
+            model: "gpt-wire",
+            workspaceID: nil,
+            workspaceName: nil,
+            workspacePath: nil,
+            sessionID: nil,
+            taskID: nil,
+            estimatedCost: 0,
+            actualCost: 0,
+            estimatedCostKnown: false,
+            actualCostKnown: false,
+            estimatedTokens: 0,
+            actualTokens: 0,
+            estimatedTokensKnown: false,
+            actualTokensKnown: false,
+            inputTokens: nil,
+            outputTokens: nil,
+            requestCount: nil,
+            signal: .unknown,
+            followUpRequired: false,
+            selectedBy: nil,
+            alternatives: [],
+            routingReason: nil,
+            metadata: [:]
+        )
+        let routingDocument = try expectDictionary(JSONSerialization.jsonObject(
+            with: try LocalAPIPayloadBuilder.smartRoutingRunJSON(record: run)
+        ))
+        let routingRun = try expectDictionary(routingDocument["routingRun"])
+        try expect(routingRun["estimatedCost"] is NSNull, "unknown estimated cost must encode as JSON null")
+        try expect(routingRun["actualTokens"] is NSNull, "unknown actual tokens must encode as JSON null")
     }
 
     private static func verifyScenario(
@@ -165,7 +248,7 @@ private enum VerifyLocalAPIProviderHealthQuotas {
         expectedStatus: UsageStatus,
         expectedAlertTitle: String
     ) throws {
-        let data = LocalAPIPayloadBuilder.mcpSnapshotJSON(
+        let data = try LocalAPIPayloadBuilder.mcpSnapshotJSON(
             providers: [provider],
             filteredProviderID: provider.id
         )

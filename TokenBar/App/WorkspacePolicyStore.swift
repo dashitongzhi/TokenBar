@@ -1,26 +1,34 @@
 import Foundation
 
 struct WorkspacePolicyStore {
-    private let storeURL: URL
+    private let document: JSONDocumentStore<[WorkspacePolicy]>
 
-    init(fileManager: FileManager = .default) {
-        let support = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? fileManager.temporaryDirectory
-        let directory = support.appendingPathComponent("TokenBar", isDirectory: true)
-        try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        storeURL = directory.appendingPathComponent("workspace-policies.json")
+    init(
+        fileManager: FileManager = .default,
+        directoryURL: URL? = nil
+    ) {
+        document = JSONDocumentStore(
+            fileName: "workspace-policies.json",
+            fileManager: fileManager,
+            directoryURL: directoryURL
+        )
     }
 
     func load(defaults: [WorkspacePolicy]) -> [WorkspacePolicy] {
-        guard let data = try? Data(contentsOf: storeURL) else {
+        let saved: [WorkspacePolicy]
+        switch document.load() {
+        case .missing:
             var normalizedDefaults = defaults
             if normalizeExpiredSpendBuckets(in: &normalizedDefaults) {
                 save(normalizedDefaults)
             }
             return normalizedDefaults
-        }
-        guard let saved = try? JSONDecoder.tokenBar.decode([WorkspacePolicy].self, from: data) else {
-            save(defaults)
-            return defaults
+        case .unreadable:
+            var normalizedDefaults = defaults
+            _ = normalizeExpiredSpendBuckets(in: &normalizedDefaults)
+            return normalizedDefaults
+        case .loaded(let policies):
+            saved = policies
         }
 
         var changed = false
@@ -51,8 +59,7 @@ struct WorkspacePolicyStore {
     }
 
     func save(_ policies: [WorkspacePolicy]) {
-        guard let data = try? JSONEncoder.tokenBar.encode(policies) else { return }
-        try? data.write(to: storeURL, options: [.atomic])
+        try? document.save(policies)
     }
 
     private static let demoSeedIDs: Set<String> = ["client-app", "personal-lab", "production-fix"]

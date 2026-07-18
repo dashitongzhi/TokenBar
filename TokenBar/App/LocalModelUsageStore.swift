@@ -1,20 +1,27 @@
 import Foundation
 
 struct LocalModelUsageStore {
-    private let storeURL: URL
+    private let document: JSONDocumentStore<[ModelUsageRollup]>
     private let calendar = Calendar(identifier: .gregorian)
 
-    init(fileManager: FileManager = .default) {
-        let support = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? fileManager.temporaryDirectory
-        let directory = support.appendingPathComponent("TokenBar", isDirectory: true)
-        try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        storeURL = directory.appendingPathComponent("local-model-usage-rollups.json")
+    init(
+        fileManager: FileManager = .default,
+        directoryURL: URL? = nil
+    ) {
+        document = JSONDocumentStore(
+            fileName: "local-model-usage-rollups.json",
+            fileManager: fileManager,
+            directoryURL: directoryURL
+        )
     }
 
     func load(now: Date = .now) -> [ModelUsageRollup] {
-        guard let data = try? Data(contentsOf: storeURL),
-              var rollups = try? JSONDecoder.tokenBar.decode([ModelUsageRollup].self, from: data) else {
+        var rollups: [ModelUsageRollup]
+        switch document.load() {
+        case .missing, .unreadable:
             return []
+        case .loaded(let saved):
+            rollups = saved
         }
 
         let day = dayKey(for: now)
@@ -71,8 +78,7 @@ struct LocalModelUsageStore {
     }
 
     private func save(_ rollups: [ModelUsageRollup]) {
-        guard let data = try? JSONEncoder.tokenBar.encode(rollups) else { return }
-        try? data.write(to: storeURL, options: [.atomic])
+        try? document.save(rollups)
     }
 
     private func resetExpiredBuckets(_ rollup: inout ModelUsageRollup, day: String, month: String) {

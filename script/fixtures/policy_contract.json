@@ -1,0 +1,264 @@
+{
+  "version": 1,
+  "description": "Shared policy decisions that the Swift policy engine and Ruby offline CLI must evaluate consistently.",
+  "companyManagedKeySources": [
+    "company",
+    "company_managed",
+    "managed",
+    "codex_managed",
+    "tokenbar_keychain",
+    "tokenbar",
+    "api_proxy",
+    "org",
+    "workspace"
+  ],
+  "defaults": {
+    "input": {
+      "agent": "codex",
+      "workspaceID": "policy-contract",
+      "providerID": "openai",
+      "model": "gpt-5",
+      "estimatedCost": 1.0,
+      "estimatedTokens": 1000,
+      "keySource": null,
+      "intent": "policy-contract"
+    },
+    "config": {
+      "workspace": {
+        "id": "policy-contract",
+        "name": "Policy Contract"
+      },
+      "budgets": {
+        "daily": 0,
+        "monthly": 0,
+        "spend_today": 0,
+        "spend_month": 0,
+        "max_run": 0
+      },
+      "rules": {
+        "max_estimated_tokens": 0
+      },
+      "providers": {
+        "allowed": [
+          "openai"
+        ],
+        "preferred": "openai",
+        "require_company_key": false
+      },
+      "models": {
+        "default": "gpt-5",
+        "blocked": []
+      }
+    }
+  },
+  "cases": [
+    {
+      "id": "zero_per_run_cap_disables_limit",
+      "input": {
+        "estimatedCost": 250.0
+      },
+      "expected": {
+        "status": "allow",
+        "reasonsInclude": [
+          "Workspace, provider, model, and budget are inside policy."
+        ],
+        "reasonsExclude": [
+          "Estimated run cost is above the per-run cap."
+        ]
+      }
+    },
+    {
+      "id": "positive_per_run_cap_blocks",
+      "input": {
+        "estimatedCost": 2.01
+      },
+      "config": {
+        "budgets": {
+          "max_run": 2.0
+        }
+      },
+      "expected": {
+        "status": "block",
+        "reasonsInclude": [
+          "Estimated run cost is above the per-run cap."
+        ]
+      }
+    },
+    {
+      "id": "zero_token_cap_disables_limit",
+      "input": {
+        "estimatedTokens": 1000000
+      },
+      "expected": {
+        "status": "allow",
+        "reasonsExclude": [
+          "Estimated run tokens are above the workspace token cap."
+        ]
+      }
+    },
+    {
+      "id": "positive_token_cap_blocks",
+      "input": {
+        "estimatedTokens": 1001
+      },
+      "config": {
+        "rules": {
+          "max_estimated_tokens": 1000
+        }
+      },
+      "expected": {
+        "status": "block",
+        "reasonsInclude": [
+          "Estimated run tokens are above the workspace token cap."
+        ]
+      }
+    },
+    {
+      "id": "company_managed_key_sources_allow_openai",
+      "input": {
+        "keySource": "$companyManagedKeySource"
+      },
+      "config": {
+        "providers": {
+          "require_company_key": true
+        }
+      },
+      "expected": {
+        "status": "allow",
+        "reasonsExclude": [
+          "Workspace requires a company-managed key."
+        ]
+      }
+    },
+    {
+      "id": "company_managed_key_source_normalizes_hyphens",
+      "input": {
+        "keySource": "company-managed"
+      },
+      "config": {
+        "providers": {
+          "require_company_key": true
+        }
+      },
+      "expected": {
+        "status": "allow",
+        "reasonsExclude": [
+          "Workspace requires a company-managed key."
+        ]
+      }
+    },
+    {
+      "id": "personal_key_blocks_openai_when_company_key_required",
+      "input": {
+        "keySource": "personal"
+      },
+      "config": {
+        "providers": {
+          "require_company_key": true
+        }
+      },
+      "expected": {
+        "status": "block",
+        "reasonsInclude": [
+          "Workspace requires a company-managed key."
+        ]
+      }
+    },
+    {
+      "id": "company_key_requirement_is_openai_specific",
+      "input": {
+        "providerID": "anthropic",
+        "model": "claude-sonnet",
+        "keySource": "personal"
+      },
+      "config": {
+        "providers": {
+          "allowed": [
+            "anthropic"
+          ],
+          "preferred": "anthropic",
+          "require_company_key": true
+        },
+        "models": {
+          "default": "claude-sonnet"
+        }
+      },
+      "expected": {
+        "status": "allow",
+        "reasonsExclude": [
+          "Workspace requires a company-managed key."
+        ]
+      }
+    },
+    {
+      "id": "daily_budget_warns_at_eighty_percent",
+      "input": {
+        "estimatedCost": 1.0
+      },
+      "config": {
+        "budgets": {
+          "daily": 10.0,
+          "spend_today": 7.0
+        }
+      },
+      "expected": {
+        "status": "warn",
+        "projectedDailySpend": 8.0,
+        "reasonsInclude": [
+          "Projected daily spend is close to the workspace budget."
+        ]
+      }
+    },
+    {
+      "id": "monthly_budget_blocks_at_limit",
+      "input": {
+        "estimatedCost": 2.0
+      },
+      "config": {
+        "budgets": {
+          "monthly": 20.0,
+          "spend_month": 18.0
+        }
+      },
+      "expected": {
+        "status": "block",
+        "projectedMonthlySpend": 20.0,
+        "reasonsInclude": [
+          "Projected monthly spend would exceed the workspace budget."
+        ]
+      }
+    },
+    {
+      "id": "blocked_model_match_is_case_insensitive",
+      "input": {
+        "model": "GPT-5-Pro-Latest"
+      },
+      "config": {
+        "models": {
+          "blocked": [
+            "gpt-5-pro"
+          ]
+        }
+      },
+      "expected": {
+        "status": "block",
+        "reasonsInclude": [
+          "Model is blocked by the workspace policy."
+        ]
+      }
+    },
+    {
+      "id": "provider_outside_allowlist_blocks",
+      "input": {
+        "providerID": "anthropic",
+        "model": "claude-sonnet"
+      },
+      "expected": {
+        "status": "block",
+        "reasonsInclude": [
+          "Provider is not allowed for this workspace."
+        ]
+      }
+    }
+  ]
+}

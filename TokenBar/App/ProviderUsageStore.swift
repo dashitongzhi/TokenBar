@@ -21,8 +21,7 @@ struct ProviderUsageStore {
         case .missing:
             return normalizedDefaults
         case .unreadable:
-            save(normalizedDefaults)
-            return Self.normalized(defaults)
+            return normalizedDefaults
         case .loaded(let saved):
             providers = saved
         }

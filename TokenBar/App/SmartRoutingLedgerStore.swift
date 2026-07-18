@@ -2,19 +2,20 @@ import Foundation
 
 @MainActor
 final class SmartRoutingLedgerStore {
-    private let storeURL: URL
+    private let document: JSONDocumentStore<[SmartRoutingRunRecord]>
     private let maxRecords = 2_000
     private let retentionSeconds: TimeInterval = 90 * 24 * 3600
 
-    init(fileManager: FileManager = .default, storeURL: URL? = nil) {
-        if let storeURL {
-            self.storeURL = storeURL
-            return
-        }
-        let support = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? fileManager.temporaryDirectory
-        let directory = support.appendingPathComponent("TokenBar", isDirectory: true)
-        try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        self.storeURL = directory.appendingPathComponent("smart-routing-runs.json")
+    init(
+        fileManager: FileManager = .default,
+        storeURL: URL? = nil,
+        directoryURL: URL? = nil
+    ) {
+        document = JSONDocumentStore(
+            fileName: storeURL?.lastPathComponent ?? "smart-routing-runs.json",
+            fileManager: fileManager,
+            directoryURL: storeURL?.deletingLastPathComponent() ?? directoryURL
+        )
     }
 
     func record(_ input: SmartRoutingRunInput, fallbackWorkspaceID: String?, fallbackAgent: AgentProvider, now: Date = .now) -> SmartRoutingRunRecord {
@@ -122,16 +123,16 @@ final class SmartRoutingLedgerStore {
     }
 
     private func load() -> [SmartRoutingRunRecord] {
-        guard let data = try? Data(contentsOf: storeURL),
-              let records = try? JSONDecoder.tokenBar.decode([SmartRoutingRunRecord].self, from: data) else {
+        switch document.load() {
+        case .missing, .unreadable:
             return []
+        case .loaded(let records):
+            return records
         }
-        return records
     }
 
     private func save(_ records: [SmartRoutingRunRecord]) {
-        guard let data = try? JSONEncoder.tokenBar.encode(records) else { return }
-        try? data.write(to: storeURL, options: [.atomic])
+        try? document.save(records)
     }
 
     private func pruned(_ records: [SmartRoutingRunRecord], now: Date) -> [SmartRoutingRunRecord] {

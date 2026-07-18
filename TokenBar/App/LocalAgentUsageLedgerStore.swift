@@ -14,13 +14,17 @@ struct LocalAgentUsageDelta: Equatable {
 }
 
 struct LocalAgentUsageLedgerStore {
-    private let storeURL: URL
+    private let document: JSONDocumentStore<[String: LocalAgentUsageCursor]>
 
-    init(fileManager: FileManager = .default) {
-        let support = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? fileManager.temporaryDirectory
-        let directory = support.appendingPathComponent("TokenBar", isDirectory: true)
-        try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        storeURL = directory.appendingPathComponent("local-agent-usage-ledger.json")
+    init(
+        fileManager: FileManager = .default,
+        directoryURL: URL? = nil
+    ) {
+        document = JSONDocumentStore(
+            fileName: "local-agent-usage-ledger.json",
+            fileManager: fileManager,
+            directoryURL: directoryURL
+        )
     }
 
     func apply(sessionKey: String, cumulativeCost: Double, cumulativeTokens: Double, cumulativeRequestCount: Int, now: Date) -> LocalAgentUsageDelta {
@@ -42,16 +46,16 @@ struct LocalAgentUsageLedgerStore {
     }
 
     private func load() -> [String: LocalAgentUsageCursor] {
-        guard let data = try? Data(contentsOf: storeURL),
-              let ledger = try? JSONDecoder.tokenBar.decode([String: LocalAgentUsageCursor].self, from: data) else {
+        switch document.load() {
+        case .missing, .unreadable:
             return [:]
+        case .loaded(let ledger):
+            return ledger
         }
-        return ledger
     }
 
     private func save(_ ledger: [String: LocalAgentUsageCursor]) {
-        guard let data = try? JSONEncoder.tokenBar.encode(ledger) else { return }
-        try? data.write(to: storeURL, options: [.atomic])
+        try? document.save(ledger)
     }
 
     private func pruned(_ ledger: [String: LocalAgentUsageCursor], now: Date) -> [String: LocalAgentUsageCursor] {

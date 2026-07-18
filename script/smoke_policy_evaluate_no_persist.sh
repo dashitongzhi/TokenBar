@@ -35,7 +35,8 @@ workspace_store_contains_id() {
   ruby -rjson -e '
     id = ARGV.fetch(0)
     data = JSON.parse(File.read(ARGV.fetch(1)))
-    exit(Array(data).any? { |workspace| workspace["id"].to_s == id } ? 0 : 1)
+    workspaces = data.is_a?(Hash) && data["payload"].is_a?(Array) ? data["payload"] : data
+    exit(Array(workspaces).any? { |workspace| workspace["id"].to_s == id } ? 0 : 1)
   ' "$id" "$POLICY_STORE"
 }
 

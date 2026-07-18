@@ -1,320 +1,66 @@
 import Foundation
 
+@MainActor
 enum LocalAPIPayloadBuilder {
-    static func policyJSON(currentDecision: PolicyDecision, workspacePolicies: [WorkspacePolicy]) -> Data {
-        let payload: [String: Any] = [
-            "version": "1.0",
-            "timestamp": ISO8601DateFormatter().string(from: Date()),
-            "localOnly": true,
-            "decision": policyDictionary(currentDecision),
-            "workspaces": workspacePolicies.map { workspace in
-                [
-                    "id": workspace.id,
-                    "name": workspace.name,
-                    "pathHint": workspace.pathHint,
-                    "dailyBudget": workspace.dailyBudget,
-                    "monthlyBudget": workspace.monthlyBudget,
-                    "spendToday": workspace.spendToday,
-                    "spendMonth": workspace.spendMonth,
-                    "spendDayKey": workspace.spendDayKey ?? NSNull(),
-                    "spendMonthKey": workspace.spendMonthKey ?? NSNull(),
-                    "maxEstimatedRunCost": workspace.maxEstimatedRunCost,
-                    "maxEstimatedTokens": workspace.maxEstimatedTokens,
-                    "allowedProviders": workspace.allowedProviderIDs,
-                    "preferredProvider": workspace.preferredProviderID ?? NSNull(),
-                    "preferredModel": workspace.preferredModel ?? NSNull(),
-                    "blockedModels": workspace.blockedModels,
-                    "requireCompanyKey": workspace.requireCompanyKey,
-                    "setupSourceDetail": workspace.setupSourceDetail ?? NSNull(),
-                    "configuredModelCount": workspace.configuredModelCount ?? NSNull()
-                ] as [String: Any]
-            }
-        ]
-        return jsonData(payload)
+    static func policyJSON(currentDecision: PolicyDecision, workspacePolicies: [WorkspacePolicy]) throws -> Data {
+        try encode(LocalAPIWire.PolicyDocument(
+            timestamp: timestamp(),
+            decision: .init(currentDecision),
+            workspaces: workspacePolicies.map(LocalAPIWire.Workspace.init)
+        ))
     }
 
-    static func policyDecisionJSON(_ decision: PolicyDecision) -> Data {
-        let payload: [String: Any] = [
-            "version": "1.0",
-            "timestamp": ISO8601DateFormatter().string(from: Date()),
-            "localOnly": true,
-            "decision": policyDictionary(decision)
-        ]
-        return jsonData(payload)
+    static func policyDecisionJSON(_ decision: PolicyDecision) throws -> Data {
+        try encode(LocalAPIWire.PolicyDecisionDocument(
+            timestamp: timestamp(),
+            decision: .init(decision)
+        ))
     }
 
-    static func localAgentUsageJSON(snapshot: LocalAgentUsageAppliedSnapshot, decision: PolicyDecision) -> Data {
-        let payload: [String: Any] = [
-            "version": "1.0",
-            "timestamp": ISO8601DateFormatter().string(from: Date()),
-            "localOnly": true,
-            "source": snapshot.sourceName,
-            "usage": [
-                "agent": snapshot.agent.displayName,
-                "provider": snapshot.providerID,
-                "model": snapshot.model,
-                "workspaceID": snapshot.workspaceID ?? NSNull(),
-                "sessionKey": snapshot.sessionKey,
-                "dataSource": UsageDataSource.localAgent.rawValue,
-                "costDelta": snapshot.costDelta,
-                "tokenDelta": snapshot.tokenDelta,
-                "requestDelta": snapshot.requestDelta,
-                "contextTokenTotal": snapshot.contextTokenTotal,
-                "contextWindowSize": snapshot.contextWindowSize ?? NSNull(),
-                "rateLimitUsedPercentage": snapshot.rateLimitUsedPercentage ?? NSNull(),
-                "rateLimitResetAt": snapshot.rateLimitResetAt.map { ISO8601DateFormatter().string(from: $0) } ?? NSNull(),
-                "occurredAt": ISO8601DateFormatter().string(from: snapshot.occurredAt),
-                "sourceDetail": snapshot.sourceDetail
-            ] as [String: Any],
-            "decision": policyDictionary(decision)
-        ]
-        return jsonData(payload)
+    static func localAgentUsageJSON(snapshot: LocalAgentUsageAppliedSnapshot, decision: PolicyDecision) throws -> Data {
+        try encode(LocalAPIWire.LocalAgentUsageDocument(
+            timestamp: timestamp(),
+            source: snapshot.sourceName,
+            usage: .init(snapshot),
+            decision: .init(decision)
+        ))
     }
 
-    static func smartRoutingRunJSON(record: SmartRoutingRunRecord) -> Data {
-        let payload: [String: Any] = [
-            "version": "1.0",
-            "timestamp": ISO8601DateFormatter().string(from: Date()),
-            "localOnly": true,
-            "routingRun": smartRoutingRunDictionary(record)
-        ]
-        return jsonData(payload)
+    static func smartRoutingRunJSON(record: SmartRoutingRunRecord) throws -> Data {
+        try encode(LocalAPIWire.SmartRoutingRunDocument(
+            timestamp: timestamp(),
+            routingRun: .init(record)
+        ))
     }
 
-    static func smartRoutingStatsJSON(snapshot: SmartRoutingStatsSnapshot) -> Data {
-        let payload: [String: Any] = [
-            "version": "1.0",
-            "timestamp": ISO8601DateFormatter().string(from: snapshot.generatedAt),
-            "localOnly": true,
-            "stats": [
-                "totalRuns": snapshot.totalRuns,
-                "winCount": snapshot.winCount,
-                "followUpCount": snapshot.followUpCount,
-                "failedCount": snapshot.failedCount,
-                "unknownCount": snapshot.unknownCount,
-                "winRate": snapshot.winRate,
-                "followUpRate": snapshot.followUpRate,
-                "estimatedCostTotal": snapshot.estimatedCostTotal,
-                "actualCostTotal": snapshot.actualCostTotal,
-                "estimatedCostKnownRunCount": snapshot.estimatedCostKnownRunCount,
-                "actualCostKnownRunCount": snapshot.actualCostKnownRunCount,
-                "estimatedTokensTotal": snapshot.estimatedTokensTotal,
-                "actualTokensTotal": snapshot.actualTokensTotal,
-                "estimatedTokensKnownRunCount": snapshot.estimatedTokensKnownRunCount,
-                "actualTokensKnownRunCount": snapshot.actualTokensKnownRunCount,
-                "excludedNonProductionRuns": snapshot.excludedNonProductionRuns
-            ],
-            "routes": snapshot.routeStats.map(smartRoutingRouteDictionary),
-            "recentRuns": snapshot.recentRuns.map(smartRoutingRunDictionary)
-        ]
-        return jsonData(payload)
+    static func smartRoutingStatsJSON(snapshot: SmartRoutingStatsSnapshot) throws -> Data {
+        try encode(LocalAPIWire.SmartRoutingStatsDocument(
+            timestamp: timestamp(snapshot.generatedAt),
+            stats: .init(snapshot),
+            routes: snapshot.routeStats.map(LocalAPIWire.SmartRoutingRoute.init),
+            recentRuns: snapshot.recentRuns.map(LocalAPIWire.SmartRoutingRun.init)
+        ))
     }
 
-    static func mcpSnapshotJSON(providers: [ProviderUsage], filteredProviderID: String? = nil) -> Data {
+    static func mcpSnapshotJSON(providers: [ProviderUsage], filteredProviderID: String? = nil) throws -> Data {
         let selected = filteredProviderID.map { id in providers.filter { $0.id == id } } ?? providers
-        let quotas = selected.map { provider in
-            var metric: [String: Any] = [
-                "name": provider.unit,
-                "current": provider.current,
-                "limit": provider.hasKnownQuotaLimit ? provider.limit : NSNull(),
-                "unit": provider.unit,
-                "remaining": provider.knownRemaining ?? NSNull(),
-                "usageRatio": provider.usageRatio,
-                "burnRatePerHour": provider.burnRatePerHour,
-                "resetAt": ISO8601DateFormatter().string(from: provider.resetAt),
-                "dataSource": provider.sourceKind.rawValue,
-                "sourceDetail": provider.sourceDescription,
-                "sourceUpdatedAt": provider.sourceUpdatedAt.map { ISO8601DateFormatter().string(from: $0) } ?? NSNull(),
-                "quotaLimitKnown": provider.hasKnownQuotaLimit,
-                "tokensToday": provider.todayTokenCount,
-                "requestsKnown": provider.hasKnownRequestCount,
-                "requestsToday": provider.knownTodayRequestCount ?? NSNull(),
-                "requestsMonth": provider.knownRequestCount ?? NSNull(),
-                "spendTodayKnown": provider.hasKnownSpendToday,
-                "spendToday": provider.hasKnownSpendToday ? provider.spendToday as Any : NSNull() as Any,
-                "spendMonthKnown": provider.hasKnownSpendMonth,
-                "spendMonth": provider.hasKnownSpendMonth ? provider.spendMonth as Any : NSNull() as Any,
-                "currency": provider.displayCurrency
-            ]
-            metric["localAgentUsage"] = provider.localAgentUsage.map { summary in
-                [
-                    "tokensToday": summary.tokensToday,
-                    "requestCountToday": summary.requestCountToday,
-                    "requestCountMonth": summary.requestCountMonth,
-                    "spendToday": summary.spendToday,
-                    "spendMonth": summary.spendMonth,
-                    "lastUpdated": ISO8601DateFormatter().string(from: summary.lastUpdated),
-                    "sourceDetail": summary.sourceDetail
-                ]
-            } ?? NSNull()
-            metric["predictedExhaustion"] = provider.predictedExhaustion.map { ISO8601DateFormatter().string(from: $0) } ?? NSNull()
-            return [
-                "platform": provider.id,
-                "displayName": provider.name,
-                "status": provider.status.rawValue,
-                "healthAlerts": provider.activeHealthAlerts.map(healthAlertDictionary),
-                "dataSource": provider.sourceKind.rawValue,
-                "sourceDetail": provider.sourceDescription,
-                "metrics": [metric]
-            ] as [String: Any]
-        }
-        let payload: [String: Any] = [
-            "version": "1.0",
-            "timestamp": ISO8601DateFormatter().string(from: Date()),
-            "localOnly": true,
-            "quotas": quotas
-        ]
-        return jsonData(payload)
+        return try encode(LocalAPIWire.QuotaDocument(
+            timestamp: timestamp(),
+            quotas: selected.map(LocalAPIWire.Quota.init)
+        ))
     }
 
-    static func paceJSON(provider: ProviderUsage, recommendation: String) -> Data {
-        let payload: [String: Any] = [
-            "platform": provider.id,
-            "displayName": provider.name,
-            "status": provider.status.rawValue,
-            "dataSource": provider.sourceKind.rawValue,
-            "sourceDetail": provider.sourceDescription,
-            "burnRatePerHour": provider.burnRatePerHour,
-            "remaining": provider.knownRemaining ?? NSNull(),
-            "quotaLimitKnown": provider.hasKnownQuotaLimit,
-            "tokensToday": provider.todayTokenCount,
-            "tokensMonth": provider.current,
-            "requestsKnown": provider.hasKnownRequestCount,
-            "requestsToday": provider.knownTodayRequestCount ?? NSNull(),
-            "requestsMonth": provider.knownRequestCount ?? NSNull(),
-            "spendTodayKnown": provider.hasKnownSpendToday,
-            "spendToday": provider.hasKnownSpendToday ? provider.spendToday as Any : NSNull() as Any,
-            "spendMonthKnown": provider.hasKnownSpendMonth,
-            "spendMonth": provider.hasKnownSpendMonth ? provider.spendMonth as Any : NSNull() as Any,
-            "currency": provider.displayCurrency,
-            "predictedExhaustion": provider.predictedExhaustion.map { ISO8601DateFormatter().string(from: $0) } ?? NSNull(),
-            "healthAlerts": provider.activeHealthAlerts.map(healthAlertDictionary),
-            "recommendation": recommendation
-        ]
-        return jsonData(payload)
+    static func paceJSON(provider: ProviderUsage, recommendation: String) throws -> Data {
+        try encode(LocalAPIWire.Pace(provider: provider, recommendation: recommendation))
     }
 
-    private nonisolated static func healthAlertDictionary(_ alert: ProviderHealthAlert) -> [String: Any] {
-        [
-            "status": alert.status.rawValue,
-            "title": alert.title,
-            "detail": alert.detail
-        ]
+    private static func timestamp(_ date: Date = .now) -> String {
+        ISO8601DateFormatter().string(from: date)
     }
 
-    private static func policyDictionary(_ decision: PolicyDecision) -> [String: Any] {
-        [
-            "status": decision.status.rawValue,
-            "agent": decision.agent.displayName,
-            "workspace": [
-                "id": decision.workspaceID,
-                "name": decision.workspaceName
-            ],
-            "provider": decision.providerID,
-            "model": decision.model,
-            "estimatedCost": decision.estimatedCost,
-            "projectedDailySpend": decision.projectedDailySpend,
-            "projectedMonthlySpend": decision.projectedMonthlySpend,
-            "reasons": decision.reasons,
-            "recommendation": decision.recommendation,
-            "fallbackProvider": decision.fallbackProviderID ?? NSNull(),
-            "routingMode": decision.routingMode.rawValue,
-            "smartRouting": decision.smartRoutingRecommendation.map(smartRoutingRecommendationDictionary) ?? NSNull(),
-            "timestamp": ISO8601DateFormatter().string(from: decision.timestamp)
-        ]
-    }
-
-    private nonisolated static func smartRoutingRecommendationDictionary(_ recommendation: SmartRoutingRecommendation) -> [String: Any] {
-        [
-            "provider": recommendation.providerID,
-            "model": recommendation.model,
-            "taskIntent": recommendation.taskIntent,
-            "confidence": recommendation.confidence,
-            "evidenceRunCount": recommendation.evidenceRunCount,
-            "winRate": recommendation.winRate,
-            "estimatedCost": recommendation.estimatedCost,
-            "reason": recommendation.reason,
-            "alternatives": recommendation.alternatives
-        ]
-    }
-
-    private nonisolated static func smartRoutingRunDictionary(_ record: SmartRoutingRunRecord) -> [String: Any] {
-        [
-            "id": record.id.uuidString,
-            "recordedAt": ISO8601DateFormatter().string(from: record.recordedAt),
-            "occurredAt": ISO8601DateFormatter().string(from: record.occurredAt),
-            "agent": agentDisplayName(record.agent),
-            "agentID": record.agent.rawValue,
-            "taskIntent": record.taskIntent,
-            "provider": record.providerID,
-            "model": record.model,
-            "workspaceID": record.workspaceID ?? NSNull(),
-            "workspaceName": record.workspaceName ?? NSNull(),
-            "workspacePath": record.workspacePath ?? NSNull(),
-            "sessionID": record.sessionID ?? NSNull(),
-            "taskID": record.taskID ?? NSNull(),
-            // Nil markers denote a record persisted before the markers existed.
-            "estimatedCost": record.estimatedCostKnown != false ? record.estimatedCost : NSNull(),
-            "actualCost": record.actualCostKnown != false ? record.actualCost : NSNull(),
-            "costDelta": record.estimatedCostKnown != false && record.actualCostKnown != false
-                ? record.actualCost - record.estimatedCost
-                : NSNull(),
-            "estimatedTokens": record.estimatedTokensKnown != false ? record.estimatedTokens : NSNull(),
-            "actualTokens": record.actualTokensKnown != false ? record.actualTokens : NSNull(),
-            "tokenDelta": record.estimatedTokensKnown != false && record.actualTokensKnown != false
-                ? record.actualTokens - record.estimatedTokens
-                : NSNull(),
-            "inputTokens": record.inputTokens ?? NSNull(),
-            "outputTokens": record.outputTokens ?? NSNull(),
-            "requestCount": record.requestCount ?? NSNull(),
-            "signal": record.signal.rawValue,
-            "followUpRequired": record.followUpRequired,
-            "win": record.signal == .success && record.followUpRequired == false,
-            "selectedBy": record.selectedBy ?? NSNull(),
-            "alternatives": record.alternatives,
-            "routingReason": record.routingReason ?? NSNull(),
-            "metadata": record.metadata
-        ]
-    }
-
-    private nonisolated static func smartRoutingRouteDictionary(_ route: SmartRoutingRouteStats) -> [String: Any] {
-        [
-            "routeKey": route.routeKey,
-            "provider": route.providerID,
-            "model": route.model,
-            "taskIntent": route.taskIntent,
-            "runCount": route.runCount,
-            "winCount": route.winCount,
-            "followUpCount": route.followUpCount,
-            "failedCount": route.failedCount,
-            "unknownCount": route.unknownCount,
-            "winRate": route.winRate,
-            "followUpRate": route.followUpRate,
-            "estimatedCostTotal": route.estimatedCostTotal,
-            "actualCostTotal": route.actualCostTotal,
-            "estimatedCostKnownRunCount": route.estimatedCostKnownRunCount,
-            "actualCostKnownRunCount": route.actualCostKnownRunCount,
-            "estimatedTokensTotal": route.estimatedTokensTotal,
-            "actualTokensTotal": route.actualTokensTotal,
-            "estimatedTokensKnownRunCount": route.estimatedTokensKnownRunCount,
-            "actualTokensKnownRunCount": route.actualTokensKnownRunCount,
-            "averageCostDelta": route.averageCostDelta,
-            "averageTokenDelta": route.averageTokenDelta,
-            "lastRunAt": ISO8601DateFormatter().string(from: route.lastRunAt)
-        ]
-    }
-
-    private nonisolated static func agentDisplayName(_ agent: AgentProvider) -> String {
-        switch agent {
-        case .claudeCode: "Claude Code"
-        case .codex: "Codex"
-        case .cursor: "Cursor"
-        case .continueDev: "Continue"
-        case .custom: "Custom Agent"
-        }
-    }
-
-    private static func jsonData(_ payload: [String: Any]) -> Data {
-        (try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])) ?? Data("{}".utf8)
+    private static func encode<Value: Encodable>(_ value: Value) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return try encoder.encode(value)
     }
 }

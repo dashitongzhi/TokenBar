@@ -2,14 +2,14 @@ import Foundation
 
 @MainActor
 protocol LocalAPIApplicationState: AnyObject {
-    func policyJSON() -> Data
-    func policyDecisionJSON(input: PolicyEvaluationInput) -> Data
-    func ingestLocalAgentUsageJSON(input: LocalAgentUsageIngest) -> Data
-    func ingestClaudeStatuslineJSON(data: Data) -> Data
-    func recordSmartRoutingRunJSON(input: SmartRoutingRunInput) -> Data
-    func smartRoutingStatsJSON() -> Data
-    func mcpSnapshotJSON(filteredProviderID: String?) -> Data
-    func paceJSON(providerID: String) -> Data
+    func policyJSON() throws -> Data
+    func policyDecisionJSON(input: PolicyEvaluationInput) throws -> Data
+    func ingestLocalAgentUsageJSON(input: LocalAgentUsageIngest) throws -> Data
+    func ingestClaudeStatuslineJSON(data: Data) throws -> Data
+    func recordSmartRoutingRunJSON(input: SmartRoutingRunInput) throws -> Data
+    func smartRoutingStatsJSON() throws -> Data
+    func mcpSnapshotJSON(filteredProviderID: String?) throws -> Data
+    func paceJSON(providerID: String) throws -> Data
 }
 
 @MainActor
@@ -64,7 +64,7 @@ final class LocalAPIApplication {
 
         switch (request.method, request.path) {
         case ("GET", "/policy"):
-            return .json(state.policyJSON())
+            return json { try state.policyJSON() }
         case (_, "/policy"):
             return methodNotAllowed(["GET"])
 
@@ -72,7 +72,7 @@ final class LocalAPIApplication {
             guard let input: PolicyEvaluationInput = decode(request.body) else {
                 return .error("invalid_policy_input", statusCode: 400, reason: "Bad Request")
             }
-            return .json(state.policyDecisionJSON(input: input))
+            return json { try state.policyDecisionJSON(input: input) }
         case (_, "/policy/evaluate"):
             return methodNotAllowed(["POST"])
 
@@ -80,12 +80,12 @@ final class LocalAPIApplication {
             guard let input: LocalAgentUsageIngest = decode(request.body) else {
                 return .error("invalid_local_usage_input", statusCode: 400, reason: "Bad Request")
             }
-            return .json(state.ingestLocalAgentUsageJSON(input: input))
+            return json { try state.ingestLocalAgentUsageJSON(input: input) }
         case (_, "/usage/ingest"):
             return methodNotAllowed(["POST"])
 
         case ("POST", "/usage/claude-statusline"):
-            return .json(state.ingestClaudeStatuslineJSON(data: request.body))
+            return json { try state.ingestClaudeStatuslineJSON(data: request.body) }
         case (_, "/usage/claude-statusline"):
             return methodNotAllowed(["POST"])
 
@@ -93,17 +93,17 @@ final class LocalAPIApplication {
             guard let input: SmartRoutingRunInput = decode(request.body) else {
                 return .error("invalid_smart_routing_run_input", statusCode: 400, reason: "Bad Request")
             }
-            return .json(state.recordSmartRoutingRunJSON(input: input))
+            return json { try state.recordSmartRoutingRunJSON(input: input) }
         case (_, "/routing/runs"):
             return methodNotAllowed(["POST"])
 
         case ("GET", "/routing/stats"):
-            return .json(state.smartRoutingStatsJSON())
+            return json { try state.smartRoutingStatsJSON() }
         case (_, "/routing/stats"):
             return methodNotAllowed(["GET"])
 
         case ("GET", "/quotas"):
-            return .json(state.mcpSnapshotJSON(filteredProviderID: nil))
+            return json { try state.mcpSnapshotJSON(filteredProviderID: nil) }
         case (_, "/quotas"):
             return methodNotAllowed(["GET"])
 
@@ -116,13 +116,13 @@ final class LocalAPIApplication {
         if request.path.hasPrefix("/quotas/") {
             guard request.method == "GET" else { return methodNotAllowed(["GET"]) }
             let provider = String(request.path.dropFirst("/quotas/".count))
-            return .json(state.mcpSnapshotJSON(filteredProviderID: provider))
+            return json { try state.mcpSnapshotJSON(filteredProviderID: provider) }
         }
 
         if request.path.hasPrefix("/pace/") {
             guard request.method == "GET" else { return methodNotAllowed(["GET"]) }
             let provider = String(request.path.dropFirst("/pace/".count))
-            return .json(state.paceJSON(providerID: provider))
+            return json { try state.paceJSON(providerID: provider) }
         }
 
         return .error("not_found", statusCode: 404, reason: "Not Found")
@@ -135,6 +135,18 @@ final class LocalAPIApplication {
             reason: "Method Not Allowed",
             headers: ["Allow": methods.joined(separator: ", ")]
         )
+    }
+
+    private func json(_ body: () throws -> Data) -> LocalAPIResponse {
+        do {
+            return .json(try body())
+        } catch {
+            return .error(
+                "payload_encoding_failed",
+                statusCode: 500,
+                reason: "Internal Server Error"
+            )
+        }
     }
 
     private func isAuthorized(_ request: LocalAPIRequest) -> Bool {
