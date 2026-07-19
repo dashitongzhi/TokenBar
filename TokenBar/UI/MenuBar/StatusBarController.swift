@@ -60,7 +60,7 @@ final class StatusBarController {
         let statusImage = image?.tinted(with: .white)
         button.image = statusImage
         button.alternateImage = statusImage
-        button.imageScaling = .scaleProportionallyUpOrDown
+        button.imageScaling = .scaleNone
         button.title = appState.statusBarText()
         button.contentTintColor = .white
     }
