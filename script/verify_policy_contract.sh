@@ -14,7 +14,7 @@ xcrun --sdk macosx swiftc \
   "$ROOT_DIR/TokenBar/Core/ProviderUsageModels.swift" \
   "$ROOT_DIR/TokenBar/Core/SmartRoutingModels.swift" \
   "$ROOT_DIR/TokenBar/Core/WorkspacePolicyModels.swift" \
-  "$ROOT_DIR/TokenBar/App/PolicyEngine.swift" \
+  "$ROOT_DIR/TokenBar/Core/PolicyEngine.swift" \
   "$ROOT_DIR/TokenBarTests/PolicyContractFixtureVerifier.swift" \
   "$ROOT_DIR/script/verify_policy_contract.swift" \
   -o "$BUILD_DIR/verify_policy_contract"

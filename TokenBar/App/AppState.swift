@@ -93,6 +93,10 @@ final class AppState: ObservableObject {
         }
     }
 
+    @Published var ccSwitchLiveQuotaProbesEnabled: Bool {
+        didSet { savePreferencesAndNotify() }
+    }
+
     @Published var selectedAppIcon: AppIconChoice {
         didSet {
             savePreferencesAndNotify()
@@ -137,15 +141,13 @@ final class AppState: ObservableObject {
     @Published var modelCatalogMessage = ""
     @Published var localAPIStatus: LocalAPIStatus = .stopped
 
-    private let preferencesStore = AppPreferencesStore()
-    private let providerStore = ProviderUsageStore()
-    private let workspacePolicyStore = WorkspacePolicyStore()
-    let auditEventStore = AuditEventStore()
+    private let persistenceController = AppPersistenceController()
     let localUsageIngestionModule = LocalUsageIngestionModule()
     let smartRoutingLedgerStore = SmartRoutingLedgerStore()
     let agentModelConfigurationService = AgentModelConfigurationService()
     let providerModelCatalogService = ProviderModelCatalogService()
     let providerRefreshModule = ProviderRefreshModule()
+    private let refreshController = AppRefreshController()
     let smartRoutingRecommender = SmartRoutingRecommender()
     let ccSwitchUsageService = CCSwitchUsageService()
     private var hasExplicitSelectedProviderPreference = false
@@ -158,7 +160,7 @@ final class AppState: ObservableObject {
     #endif
 
     private init() {
-        let savedPreferences = preferencesStore.load()
+        let savedPreferences = persistenceController.loadPreferences()
         hasExplicitSelectedProviderPreference = savedPreferences.hasSelectedProviderPreference
         hasExplicitSelectedWorkspacePreference = savedPreferences.hasSelectedWorkspacePreference
         hasExplicitSelectedAgentPreference = savedPreferences.hasSelectedAgentPreference
@@ -178,6 +180,7 @@ final class AppState: ObservableObject {
         sessionSpend = savedPreferences.sessionSpend
         focusModeEnabled = savedPreferences.focusModeEnabled
         localAPIEnabled = savedPreferences.localAPIEnabled
+        ccSwitchLiveQuotaProbesEnabled = savedPreferences.ccSwitchLiveQuotaProbesEnabled
         selectedAppIcon = savedPreferences.selectedAppIcon
 
         let configuredModelRows = agentModelConfigurationService.readConfiguredModels()
@@ -189,9 +192,11 @@ final class AppState: ObservableObject {
             fallbackPath: UserHomeDirectory.url.path
         )
 
-        providers = providerStore.load(defaults: AppSeedData.providers())
-        workspacePolicies = workspacePolicyStore.load(defaults: AppSeedData.workspacePolicies(inference: inferredPolicy))
-        auditEvents = auditEventStore.load(defaults: AppSeedData.auditEvents())
+        providers = persistenceController.loadProviders(defaults: AppSeedData.providers())
+        workspacePolicies = persistenceController.loadWorkspacePolicies(
+            defaults: AppSeedData.workspacePolicies(inference: inferredPolicy)
+        )
+        auditEvents = persistenceController.loadAuditEvents(defaults: AppSeedData.auditEvents())
         normalizeSelectionsAfterLoad()
         mergeModelUsageRollups(localUsageIngestionModule.loadModelUsageRollups())
         mergeModelCatalogItems(configuredCatalogItems, replacingProviderID: nil)
@@ -208,7 +213,10 @@ final class AppState: ObservableObject {
         reloadModelCatalogFromLocalSources()
 
         Task {
-            let outcome = await providerRefreshModule.refresh(providers: providers)
+            let outcome = await refreshController.refresh(
+                providers: providers,
+                includeCCSwitchOfficialQuotaProbes: ccSwitchLiveQuotaProbesEnabled
+            )
             applyProviderRefreshOutcome(outcome)
         }
     }
@@ -222,15 +230,26 @@ final class AppState: ObservableObject {
         isRefreshingUsage = false
         currentDecision = evaluatePolicy(input: currentPolicyInput, shouldRecord: false)
         persistProviders()
-        if CommandLine.arguments.contains("--tokenbar-verify-local-api") == false,
-           CommandLine.arguments.contains("--tokenbar-verify-minimax-ccswitch-fallback-audit") == false {
+        #if DEBUG
+        let isVerificationRun = CommandLine.arguments.contains("--tokenbar-verify-local-api")
+            || CommandLine.arguments.contains("--tokenbar-verify-minimax-ccswitch-fallback-audit")
+        #else
+        let isVerificationRun = false
+        #endif
+        if isVerificationRun == false {
             NotificationService.shared.notifyIfNeeded(appState: self)
         }
         notifyStatusBarUpdate()
     }
 
     private func savePreferencesAndNotify() {
-        preferencesStore.save(AppPreferencesSnapshot(
+        #if DEBUG
+        guard isPersistenceSuppressedForVerification == false else {
+            notifyStatusBarUpdate()
+            return
+        }
+        #endif
+        persistenceController.schedulePreferences(AppPreferencesSnapshot(
             language: language,
             statusBarContent: statusBarContent,
             routingMode: routingMode,
@@ -246,6 +265,7 @@ final class AppState: ObservableObject {
             sessionSpend: sessionSpend,
             focusModeEnabled: focusModeEnabled,
             localAPIEnabled: localAPIEnabled,
+            ccSwitchLiveQuotaProbesEnabled: ccSwitchLiveQuotaProbesEnabled,
             selectedAppIcon: selectedAppIcon,
             hasSelectedProviderPreference: hasExplicitSelectedProviderPreference,
             hasSelectedWorkspacePreference: hasExplicitSelectedWorkspacePreference,
@@ -314,21 +334,21 @@ final class AppState: ObservableObject {
         #if DEBUG
         guard isPersistenceSuppressedForVerification == false else { return }
         #endif
-        auditEventStore.save(auditEvents)
+        persistenceController.scheduleAuditEvents(auditEvents)
     }
 
     func persistProviders() {
         #if DEBUG
         guard isPersistenceSuppressedForVerification == false else { return }
         #endif
-        providerStore.save(providers)
+        persistenceController.scheduleProviders(providers)
     }
 
     func persistWorkspacePolicies() {
         #if DEBUG
         guard isPersistenceSuppressedForVerification == false else { return }
         #endif
-        workspacePolicyStore.save(workspacePolicies)
+        persistenceController.scheduleWorkspacePolicies(workspacePolicies)
     }
 
 }

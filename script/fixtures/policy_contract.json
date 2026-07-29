@@ -259,6 +259,18 @@
           "Provider is not allowed for this workspace."
         ]
       }
+    },
+    {
+      "id": "unspecified_model_warns",
+      "input": {
+        "model": "unspecified"
+      },
+      "expected": {
+        "status": "warn",
+        "reasonsInclude": [
+          "No model has been selected yet."
+        ]
+      }
     }
   ]
 }

@@ -78,6 +78,8 @@ struct LocalAgentUsageSummary: Codable, Equatable {
     var requestCountMonth: Int
     var spendToday: Double
     var spendMonth: Double
+    var dayKey: String? = nil
+    var monthKey: String? = nil
     var lastUpdated: Date
     var sourceDetail: String
 }
@@ -108,6 +110,8 @@ struct ProviderUsage: Identifiable, Codable, Equatable {
     var spendMonthKnown: Bool? = nil
     var healthAlerts: [ProviderHealthAlert]? = nil
     var localAgentUsage: LocalAgentUsageSummary? = nil
+    var contextTokens: Double? = nil
+    var contextWindowSize: Double? = nil
 
     var usageRatio: Double {
         guard hasKnownQuotaLimit else { return 0 }
@@ -179,23 +183,30 @@ struct ProviderUsage: Identifiable, Codable, Equatable {
     }
 
     var status: UsageStatus {
-        let quotaStatus: UsageStatus
+        let exhaustionStatus: UsageStatus
         if let predictedExhaustion {
             let hours = predictedExhaustion.timeIntervalSinceNow / 3600
             if hours < 6 {
-                quotaStatus = .critical
+                exhaustionStatus = .critical
             } else if hours < 24 {
-                quotaStatus = .warning
+                exhaustionStatus = .warning
             } else {
-                quotaStatus = .healthy
+                exhaustionStatus = .healthy
             }
-        } else if usageRatio >= 0.9 {
-            quotaStatus = .critical
-        } else if usageRatio >= 0.7 {
-            quotaStatus = .warning
         } else {
-            quotaStatus = .healthy
+            exhaustionStatus = .healthy
         }
+        let utilizationStatus: UsageStatus
+        if usageRatio >= 0.9 {
+            utilizationStatus = .critical
+        } else if usageRatio >= 0.7 {
+            utilizationStatus = .warning
+        } else {
+            utilizationStatus = .healthy
+        }
+        let quotaStatus = exhaustionStatus.rank > utilizationStatus.rank
+            ? exhaustionStatus
+            : utilizationStatus
 
         return activeHealthAlerts.reduce(quotaStatus) { current, alert in
             alert.status.rank > current.rank ? alert.status : current

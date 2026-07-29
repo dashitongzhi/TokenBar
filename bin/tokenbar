@@ -2,4 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-exec /usr/bin/ruby "$ROOT_DIR/lib/tokenbar_cli.rb" "$@"
+if [[ -x /usr/bin/ruby ]]; then
+  exec /usr/bin/ruby "$ROOT_DIR/lib/tokenbar_cli.rb" "$@"
+fi
+exec ruby "$ROOT_DIR/lib/tokenbar_cli.rb" "$@"

@@ -19,6 +19,11 @@ struct DiscoveryTarget: Identifiable, Hashable, Sendable {
     var sourceLabel: String
 }
 
+struct DiscoveryScanResult: Sendable {
+    var keys: [DiscoveredKey]
+    var unreadableTargets: [DiscoveryTarget]
+}
+
 actor WorkspaceDiscovery {
     private let patterns: [String: [String]] = [
         "OpenAI": ["OPENAI_API_KEY", "OPENAI_KEY", "OPENAI_ADMIN_KEY", "TOKENBAR_OPENAI_ADMIN_KEY"],
@@ -27,6 +32,7 @@ actor WorkspaceDiscovery {
         "GitHub": ["GITHUB_TOKEN", "GH_TOKEN"],
         "Stripe": ["STRIPE_SECRET_KEY", "STRIPE_API_KEY"],
         "OpenRouter": ["OPENROUTER_API_KEY", "TOKENBAR_OPENROUTER_API_KEY", "OPENROUTER_MANAGEMENT_KEY", "TOKENBAR_OPENROUTER_MANAGEMENT_KEY"],
+        "MiniMax": ["MINIMAX_API_KEY"],
         "DeepSeek": ["DEEPSEEK_API_KEY"],
         "Mistral": ["MISTRAL_API_KEY"],
         "Cloudflare": ["CLOUDFLARE_API_TOKEN", "CF_API_TOKEN"],
@@ -35,11 +41,15 @@ actor WorkspaceDiscovery {
         "Groq": ["GROQ_API_KEY"]
     ]
 
-    func scan(targets: [DiscoveryTarget]) async -> [DiscoveredKey] {
+    func scan(targets: [DiscoveryTarget]) async -> DiscoveryScanResult {
         var discovered: [DiscoveredKey] = []
+        var unreadableTargets: [DiscoveryTarget] = []
         var seenIDs = Set<String>()
         for target in targets {
-            guard let content = try? String(contentsOf: target.url, encoding: .utf8) else { continue }
+            guard let content = try? String(contentsOf: target.url, encoding: .utf8) else {
+                unreadableTargets.append(target)
+                continue
+            }
             let lines = content.split(separator: "\n", omittingEmptySubsequences: false)
             for (offset, line) in lines.enumerated() {
                 let text = String(line)
@@ -65,12 +75,13 @@ actor WorkspaceDiscovery {
                 }
             }
         }
-        return discovered.sorted {
+        let keys = discovered.sorted {
             if $0.provider == $1.provider {
                 return $0.variableName < $1.variableName
             }
             return $0.provider < $1.provider
         }
+        return DiscoveryScanResult(keys: keys, unreadableTargets: unreadableTargets)
     }
 
     private func environmentValue(named variable: String, in line: String) -> String? {

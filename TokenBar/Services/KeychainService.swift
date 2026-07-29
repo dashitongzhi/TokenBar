@@ -6,13 +6,9 @@ actor KeychainService {
     private let service = "com.tokenbar.api-keys"
 
     func store(value: String, for key: String, workspace: String = "default") throws {
-        let account = "\(workspace).\(key)"
+        let account = accountName(workspace: workspace, key: key)
         let data = Data(value.utf8)
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account
-        ]
+        let query = baseQuery(account: account, dataProtection: true)
         let update: [String: Any] = [
             kSecValueData as String: data,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
@@ -30,15 +26,38 @@ actor KeychainService {
     }
 
     func retrieve(key: String, workspace: String = "default") throws -> String? {
-        let account = "\(workspace).\(key)"
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
-        ]
+        let account = accountName(workspace: workspace, key: key)
+        if let value = try retrieve(account: account, dataProtection: true) {
+            return value
+        }
 
+        // Migrate the legacy ambiguous account name/login-keychain item on first read.
+        let legacyAccount = "\(workspace).\(key)"
+        guard let legacyValue = try retrieve(account: legacyAccount, dataProtection: false) else {
+            return nil
+        }
+        try store(value: legacyValue, for: key, workspace: workspace)
+        SecItemDelete(baseQuery(account: legacyAccount, dataProtection: false) as CFDictionary)
+        return legacyValue
+    }
+
+    func delete(key: String, workspace: String = "default") throws {
+        let accounts = [
+            (accountName(workspace: workspace, key: key), true),
+            ("\(workspace).\(key)", false)
+        ]
+        for (account, dataProtection) in accounts {
+            let status = SecItemDelete(baseQuery(account: account, dataProtection: dataProtection) as CFDictionary)
+            guard status == errSecSuccess || status == errSecItemNotFound else {
+                throw KeychainError.status(status)
+            }
+        }
+    }
+
+    private func retrieve(account: String, dataProtection: Bool) throws -> String? {
+        var query = baseQuery(account: account, dataProtection: dataProtection)
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
         if status == errSecItemNotFound { return nil }
@@ -47,15 +66,17 @@ actor KeychainService {
         return String(data: data, encoding: .utf8)
     }
 
-    func delete(key: String, workspace: String = "default") throws {
-        let account = "\(workspace).\(key)"
-        let query: [String: Any] = [
+    private func baseQuery(account: String, dataProtection: Bool) -> [String: Any] {
+        [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: account
+            kSecAttrAccount as String: account,
+            kSecUseDataProtectionKeychain as String: dataProtection
         ]
-        let status = SecItemDelete(query as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else { throw KeychainError.status(status) }
+    }
+
+    private func accountName(workspace: String, key: String) -> String {
+        "\(workspace.utf8.count):\(workspace)\(key.utf8.count):\(key)"
     }
 }
 

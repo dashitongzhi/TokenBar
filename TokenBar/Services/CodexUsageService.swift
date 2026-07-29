@@ -39,7 +39,7 @@ struct CodexUsageService {
             }
             let response = try await request(auth: auth)
             guard let primary = response.rateLimit.primaryWindow else {
-                return .failure("Codex quota refresh failed: response did not include the 5-hour quota window.")
+                return .unavailable("Codex quota source is unofficial and its response no longer includes the expected primary window.")
             }
             let now = Date()
             let snapshot = CodexUsageSnapshot(
@@ -57,7 +57,12 @@ struct CodexUsageService {
             )
             return .success(snapshot)
         } catch let error as CodexUsageError {
+            if error.isEndpointUnavailable {
+                return .unavailable("Codex quota source is unofficial and currently unavailable: \(error.localizedDescription)")
+            }
             return .failure(error.localizedDescription)
+        } catch is DecodingError {
+            return .unavailable("Codex quota source is unofficial and returned an unsupported response format.")
         } catch {
             return .failure("Codex quota refresh failed: \(error.localizedDescription)")
         }
@@ -84,10 +89,11 @@ struct CodexUsageService {
         }
 
         var request = URLRequest(url: url)
+        request.timeoutInterval = 15
         request.httpMethod = "GET"
         request.setValue("Bearer \(auth.accessToken)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue("codex_vscode", forHTTPHeaderField: "originator")
+        request.setValue("tokenbar", forHTTPHeaderField: "originator")
         request.setValue("TokenBar", forHTTPHeaderField: "User-Agent")
         if let accountID = auth.accountID {
             request.setValue(accountID, forHTTPHeaderField: "ChatGPT-Account-Id")
@@ -197,6 +203,11 @@ private enum CodexUsageError: LocalizedError {
     case invalidURL
     case invalidResponse
     case httpStatus(Int, String)
+
+    var isEndpointUnavailable: Bool {
+        guard case .httpStatus(let status, _) = self else { return false }
+        return [401, 403, 404, 410].contains(status)
+    }
 
     var errorDescription: String? {
         switch self {

@@ -40,18 +40,55 @@ struct CCSwitchProviderRecord {
         config["env"] as? [String: Any] ?? [:]
     }
 
-    var apiKey: String? {
-        stringValue(config["apiKey"])
-            ?? stringValue(config["api_key"])
-            ?? stringValue(env["DEEPSEEK_API_KEY"])
-            ?? stringValue(env["ANTHROPIC_AUTH_TOKEN"])
-            ?? stringValue(env["ANTHROPIC_API_KEY"])
-            ?? stringValue(env["OPENAI_API_KEY"])
-            ?? stringValue(config["auth"].flatMap { ($0 as? [String: Any])?["OPENAI_API_KEY"] })
+    func apiKey(forProviderID providerID: String) -> String? {
+        if let explicit = stringValue(config["apiKey"]) ?? stringValue(config["api_key"]) {
+            return explicit
+        }
+
+        let environmentKeys: [String]
+        switch providerID.lowercased() {
+        case "deepseek":
+            environmentKeys = ["DEEPSEEK_API_KEY"]
+        case "minimax":
+            environmentKeys = [
+                "MINIMAX_API_KEY",
+                "TOKENBAR_MINIMAX_API_KEY",
+                "MINIMAX_ANTHROPIC_API_KEY"
+            ]
+        case "openai":
+            environmentKeys = ["OPENAI_API_KEY", "OPENAI_ADMIN_KEY"]
+        case "anthropic":
+            environmentKeys = ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_ADMIN_KEY"]
+        default:
+            environmentKeys = []
+        }
+        for key in environmentKeys {
+            if let value = stringValue(env[key]) {
+                return value
+            }
+        }
+
+        guard providerID.caseInsensitiveCompare("openai") == .orderedSame else {
+            return nil
+        }
+        return stringValue(config["auth"].flatMap { ($0 as? [String: Any])?["OPENAI_API_KEY"] })
     }
 
     var hasAPIKey: Bool {
-        apiKey?.isEmpty == false
+        if stringValue(config["apiKey"]) != nil || stringValue(config["api_key"]) != nil {
+            return true
+        }
+        return [
+            "DEEPSEEK_API_KEY",
+            "MINIMAX_API_KEY",
+            "TOKENBAR_MINIMAX_API_KEY",
+            "MINIMAX_ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_ADMIN_KEY",
+            "OPENAI_API_KEY",
+            "OPENAI_ADMIN_KEY"
+        ].contains(where: { stringValue(env[$0]) != nil })
     }
 
     var baseURL: String? {
@@ -114,23 +151,7 @@ struct CCSwitchProviderRecord {
 
     private func embeddedCodexTopLevelValue(_ key: String) -> String? {
         guard let content = stringValue(config["config"]) else { return nil }
-        var isTopLevel = true
-        for rawLine in content.components(separatedBy: .newlines) {
-            let line = rawLine.split(separator: "#", maxSplits: 1).first.map(String.init) ?? ""
-            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed.isEmpty { continue }
-            if trimmed.hasPrefix("[") {
-                isTopLevel = false
-                continue
-            }
-            guard isTopLevel, let separator = trimmed.firstIndex(of: "=") else { continue }
-            let candidate = trimmed[..<separator].trimmingCharacters(in: .whitespacesAndNewlines)
-            guard candidate == key else { continue }
-            return trimmed[trimmed.index(after: separator)...]
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
-        }
-        return nil
+        return MinimalTOMLReader.values(in: content, section: nil)[key]
     }
 
     private func embeddedCodexProviderValue(_ key: String) -> String? {
@@ -139,24 +160,87 @@ struct CCSwitchProviderRecord {
             return nil
         }
         let sectionName = "model_providers.\(provider)"
-        var inProvider = false
+        return MinimalTOMLReader.values(in: content, section: sectionName)[key]
+    }
+}
+
+enum MinimalTOMLReader {
+    static func values(in content: String, section targetSection: String?) -> [String: String] {
+        var result: [String: String] = [:]
+        var currentSection: String?
+
         for rawLine in content.components(separatedBy: .newlines) {
-            let line = rawLine.split(separator: "#", maxSplits: 1).first.map(String.init) ?? ""
-            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmed = stripComment(from: rawLine)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.isEmpty { continue }
             if trimmed.hasPrefix("[") && trimmed.hasSuffix("]") {
-                inProvider = trimmed
-                    .trimmingCharacters(in: CharacterSet(charactersIn: "[]")) == sectionName
+                currentSection = String(trimmed.dropFirst().dropLast())
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
                 continue
             }
-            guard inProvider, let separator = trimmed.firstIndex(of: "=") else { continue }
-            let candidate = trimmed[..<separator].trimmingCharacters(in: .whitespacesAndNewlines)
-            guard candidate == key else { continue }
-            return trimmed[trimmed.index(after: separator)...]
+            guard currentSection == targetSection,
+                  let separator = unquotedEquals(in: trimmed) else {
+                continue
+            }
+            let key = trimmed[..<separator].trimmingCharacters(in: .whitespacesAndNewlines)
+            let rawValue = trimmed[trimmed.index(after: separator)...]
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-                .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+            let value = unquote(rawValue)
+            if key.isEmpty == false, value.isEmpty == false {
+                result[key] = value
+            }
+        }
+        return result
+    }
+
+    private static func stripComment(from line: String) -> String {
+        var quote: Character?
+        var escaped = false
+        for index in line.indices {
+            let character = line[index]
+            if escaped {
+                escaped = false
+                continue
+            }
+            if character == "\\", quote == "\"" {
+                escaped = true
+                continue
+            }
+            if character == "\"" || character == "'" {
+                quote = quote == character ? nil : (quote == nil ? character : quote)
+            } else if character == "#", quote == nil {
+                return String(line[..<index])
+            }
+        }
+        return line
+    }
+
+    private static func unquotedEquals(in line: String) -> String.Index? {
+        var quote: Character?
+        var escaped = false
+        for index in line.indices {
+            let character = line[index]
+            if escaped {
+                escaped = false
+                continue
+            }
+            if character == "\\", quote == "\"" {
+                escaped = true
+            } else if character == "\"" || character == "'" {
+                quote = quote == character ? nil : (quote == nil ? character : quote)
+            } else if character == "=", quote == nil {
+                return index
+            }
         }
         return nil
+    }
+
+    private static func unquote(_ value: String) -> String {
+        guard value.count >= 2, let first = value.first, let last = value.last,
+              (first == "\"" && last == "\"") || (first == "'" && last == "'") else {
+            return value
+        }
+        return String(value.dropFirst().dropLast())
     }
 }
 
@@ -187,8 +271,12 @@ private final class SQLiteReader {
 
     init(path: String) throws {
         guard sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else {
-            throw SQLiteReaderError.open(message: String(cString: sqlite3_errmsg(db)))
+            let message = db.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown SQLite error"
+            sqlite3_close(db)
+            db = nil
+            throw SQLiteReaderError.open(message: message)
         }
+        sqlite3_busy_timeout(db, 2_000)
     }
 
     deinit {
@@ -249,15 +337,20 @@ private final class SQLiteReader {
         let items = try rows(
             sql: "select provider_id, app_type, is_healthy, consecutive_failures from provider_health"
         )
-        return Dictionary(uniqueKeysWithValues: items.map { row in
-            (
-                "\(row["app_type"] ?? ""):\(row["provider_id"] ?? "")",
-                CCSwitchProviderHealth(
+        return Dictionary(
+            items.map { row in
+                (
+                    "\(row["app_type"] ?? ""):\(row["provider_id"] ?? "")",
+                    CCSwitchProviderHealth(
                     isHealthy: (Int(row["is_healthy"] ?? "0") ?? 0) == 1,
                     consecutiveFailures: Int(row["consecutive_failures"] ?? "0") ?? 0
+                    )
                 )
-            )
-        })
+            },
+            uniquingKeysWith: { current, candidate in
+                candidate.consecutiveFailures >= current.consecutiveFailures ? candidate : current
+            }
+        )
     }
 
     private func rows(sql: String, parameters: [String] = []) throws -> [[String: String]] {
@@ -278,7 +371,8 @@ private final class SQLiteReader {
         }
 
         var results: [[String: String]] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
+        var stepResult = sqlite3_step(statement)
+        while stepResult == SQLITE_ROW {
             var row: [String: String] = [:]
             for index in 0..<sqlite3_column_count(statement) {
                 let name = String(cString: sqlite3_column_name(statement, index))
@@ -287,6 +381,13 @@ private final class SQLiteReader {
                 }
             }
             results.append(row)
+            stepResult = sqlite3_step(statement)
+        }
+        guard stepResult == SQLITE_DONE else {
+            throw SQLiteReaderError.step(
+                code: stepResult,
+                message: String(cString: sqlite3_errmsg(db))
+            )
         }
         return results
     }
@@ -305,11 +406,13 @@ private final class SQLiteReader {
 private enum SQLiteReaderError: LocalizedError {
     case open(message: String)
     case prepare(message: String)
+    case step(code: Int32, message: String)
 
     var errorDescription: String? {
         switch self {
         case .open(let message): "Could not open CC Switch database: \(message)"
         case .prepare(let message): "Could not read CC Switch database: \(message)"
+        case .step(let code, let message): "Could not finish reading CC Switch database (SQLite \(code)): \(message)"
         }
     }
 }

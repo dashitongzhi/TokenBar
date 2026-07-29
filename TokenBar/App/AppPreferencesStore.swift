@@ -16,6 +16,7 @@ struct AppPreferencesSnapshot {
     var sessionSpend: Double
     var focusModeEnabled: Bool
     var localAPIEnabled: Bool
+    var ccSwitchLiveQuotaProbesEnabled: Bool
     var selectedAppIcon: AppIconChoice
     var hasSelectedProviderPreference: Bool
     var hasSelectedWorkspacePreference: Bool
@@ -62,6 +63,7 @@ struct AppPreferencesStore {
             sessionSpend: number(forKey: "sessionSpend") ?? 0,
             focusModeEnabled: preferences.object(forKey: "focusModeEnabled") as? Bool ?? false,
             localAPIEnabled: preferences.object(forKey: "localAPIEnabled") as? Bool ?? true,
+            ccSwitchLiveQuotaProbesEnabled: preferences.object(forKey: "ccSwitchLiveQuotaProbesEnabled") as? Bool ?? false,
             selectedAppIcon: AppIconChoice(rawValue: preferences.string(forKey: "selectedAppIcon") ?? "") ?? .classic,
             hasSelectedProviderPreference: preferences.object(forKey: "selectedProviderID") != nil && migration.resetSelectedProvider == false,
             hasSelectedWorkspacePreference: preferences.object(forKey: "selectedWorkspaceID") != nil && migration.resetSelectedWorkspace == false,
@@ -86,6 +88,7 @@ struct AppPreferencesStore {
         preferences.set(snapshot.sessionSpend, forKey: "sessionSpend")
         preferences.set(snapshot.focusModeEnabled, forKey: "focusModeEnabled")
         preferences.set(snapshot.localAPIEnabled, forKey: "localAPIEnabled")
+        preferences.set(snapshot.ccSwitchLiveQuotaProbesEnabled, forKey: "ccSwitchLiveQuotaProbesEnabled")
         preferences.set(snapshot.selectedAppIcon.rawValue, forKey: "selectedAppIcon")
     }
 

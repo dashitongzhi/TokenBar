@@ -96,6 +96,14 @@ private struct ModelSelectionControl: View {
                         .textFieldStyle(.roundedBorder)
                 } else {
                     Picker(appState.localized("model"), selection: $appState.selectedModel) {
+                        if models.contains(where: { $0.modelID == appState.selectedModel }) == false {
+                            Text(
+                                appState.selectedModel.isEmpty
+                                    ? appState.localized("manualModelEntry")
+                                    : appState.selectedModel
+                            )
+                            .tag(appState.selectedModel)
+                        }
                         ForEach(models) { item in
                             Text(item.modelID).tag(item.modelID)
                         }

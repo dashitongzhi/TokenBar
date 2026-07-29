@@ -24,26 +24,26 @@ struct LocalUsageIngestionModule {
         selectedWorkspaceID: String,
         selectedProviderID: String,
         sessionBudget: Double,
-        sessionSpend: Double
+        sessionSpend: Double,
+        receivedAt: Date = .now
     ) -> LocalUsageIngestionOutcome {
-        let now = input.occurredAt ?? .now
-        let providerID = normalizedProviderID(
-            input.providerID,
+        let occurredAt = trustedOccurredAt(input.occurredAt, receivedAt: receivedAt)
+        let providerID = ProviderInference.providerID(
+            explicit: input.providerID,
             model: input.model,
             agent: input.agent,
             fallback: selectedProviderID
         )
         let agent = input.agent ?? AgentProvider.defaultAgent(forProviderID: providerID)
-        let model = normalizedModel(input.model, providerID: providerID)
+        let model = ProviderInference.model(input.model, providerID: providerID)
         var updatedPolicies = workspacePolicies
-        let workspaceID = upsertWorkspacePolicy(
+        let workspaceID = resolvedWorkspacePolicyID(
             from: input,
-            providerID: providerID,
             selectedWorkspaceID: selectedWorkspaceID,
-            policies: &updatedPolicies
+            policies: updatedPolicies
         )
         for index in updatedPolicies.indices {
-            _ = updatedPolicies[index].resetExpiredSpendBuckets(now: now)
+            _ = updatedPolicies[index].resetExpiredSpendBuckets(now: receivedAt)
         }
         var updatedProviders = providers
         ensureProvider(providerID, providers: &updatedProviders)
@@ -64,7 +64,7 @@ struct LocalUsageIngestionModule {
                 cumulativeCost: cumulativeCost,
                 cumulativeTokens: contextTokenTotal,
                 cumulativeRequestCount: cumulativeRequests,
-                now: now
+                now: receivedAt
             )
             : LocalAgentUsageDelta(
                 costUSD: cumulativeCost,
@@ -85,7 +85,7 @@ struct LocalUsageIngestionModule {
             contextWindowSize: input.contextWindowSize.map(Double.init),
             rateLimitUsedPercentage: input.rateLimitUsedPercentage,
             rateLimitResetAt: input.rateLimitResetAt,
-            occurredAt: now,
+            occurredAt: occurredAt,
             sourceDetail: sourceDetail(
                 input: input,
                 providerID: providerID,
@@ -116,54 +116,33 @@ struct LocalUsageIngestionModule {
         )
     }
 
-    private func upsertWorkspacePolicy(
+    private func resolvedWorkspacePolicyID(
         from input: LocalAgentUsageIngest,
-        providerID: String,
         selectedWorkspaceID: String,
-        policies: inout [WorkspacePolicy]
+        policies: [WorkspacePolicy]
     ) -> String? {
-        let workspaceID = input.workspaceID
-            ?? workspaceIDMatching(path: input.currentDirectory ?? input.workspacePath, policies: policies)
-        guard let workspaceID, workspaceID.isEmpty == false else { return selectedWorkspaceID }
-
-        if let index = policies.firstIndex(where: { $0.id == workspaceID }) {
-            policies[index].name = input.workspaceName ?? policies[index].name
-            policies[index].pathHint = input.workspacePath ?? input.currentDirectory ?? policies[index].pathHint
-            policies[index].client = input.workspaceClient ?? policies[index].client
-            policies[index].dailyBudget = input.dailyBudget ?? policies[index].dailyBudget
-            policies[index].monthlyBudget = input.monthlyBudget ?? policies[index].monthlyBudget
-            policies[index].maxEstimatedRunCost = input.maxEstimatedRunCost ?? policies[index].maxEstimatedRunCost
-            policies[index].maxEstimatedTokens = input.maxEstimatedTokens ?? policies[index].maxEstimatedTokens
-            policies[index].allowedProviderIDs = input.allowedProviderIDs ?? policies[index].allowedProviderIDs
-            policies[index].blockedModels = input.blockedModels ?? policies[index].blockedModels
-            policies[index].requireCompanyKey = input.requireCompanyKey ?? policies[index].requireCompanyKey
-            policies[index].preferredProviderID = policies[index].preferredProviderID ?? providerID
-            policies[index].preferredModel = policies[index].preferredModel ?? normalizedModel(input.model, providerID: providerID)
-        } else {
-            var allowed = ["anthropic", "openai", "openrouter"]
-            if allowed.contains(providerID) == false { allowed.append(providerID) }
-            policies.append(WorkspacePolicy(
-                id: workspaceID,
-                name: input.workspaceName ?? title(workspaceID),
-                pathHint: input.workspacePath ?? input.currentDirectory ?? "~",
-                client: input.workspaceClient ?? "local",
-                dailyBudget: input.dailyBudget ?? 0,
-                monthlyBudget: input.monthlyBudget ?? 0,
-                spendToday: 0,
-                spendMonth: 0,
-                allowedProviderIDs: input.allowedProviderIDs ?? allowed,
-                blockedModels: input.blockedModels ?? [],
-                maxEstimatedRunCost: input.maxEstimatedRunCost ?? 0,
-                maxEstimatedTokens: input.maxEstimatedTokens ?? 0,
-                requireCompanyKey: input.requireCompanyKey ?? false,
-                preferredProviderID: providerID,
-                preferredModel: normalizedModel(input.model, providerID: providerID),
-                setupSourceDetail: "Created from local agent usage ingestion.",
-                configuredModelCount: nil,
-                inferredFromPaths: [input.transcriptPath, input.currentDirectory].compactMap { $0 }
-            ))
+        if let requestedID = input.workspaceID?.trimmingCharacters(in: .whitespacesAndNewlines),
+           requestedID.isEmpty == false {
+            return policies.contains(where: { $0.id == requestedID }) ? requestedID : nil
         }
-        return workspaceID
+        if let matched = workspaceIDMatching(
+            path: input.currentDirectory ?? input.workspacePath,
+            policies: policies
+        ) {
+            return matched
+        }
+        return policies.contains(where: { $0.id == selectedWorkspaceID })
+            ? selectedWorkspaceID
+            : nil
+    }
+
+    private func trustedOccurredAt(_ candidate: Date?, receivedAt: Date) -> Date {
+        guard let candidate,
+              abs(candidate.timeIntervalSince(receivedAt)) <= 5 * 60
+        else {
+            return receivedAt
+        }
+        return candidate
     }
 
     private func ensureProvider(_ providerID: String, providers: inout [ProviderUsage]) {
@@ -189,48 +168,6 @@ struct LocalUsageIngestionModule {
         ))
     }
 
-    private func normalizedProviderID(
-        _ providerID: String?,
-        model: String?,
-        agent: AgentProvider?,
-        fallback: String
-    ) -> String {
-        let provider = providerID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if let provider, provider.isEmpty == false { return provider }
-        let model = model?.lowercased() ?? ""
-        if model.contains("claude") { return "anthropic" }
-        if model.contains("gpt") || model.contains("o1") || model.contains("o3") || model.contains("o4") { return "openai" }
-        if model.contains("minimax") { return "minimax" }
-        if model.contains("deepseek") { return "deepseek" }
-        if model.contains("gemini") { return "google" }
-        if model.contains("mistral") { return "mistral" }
-        if model.contains("kimi") { return "kimi" }
-        if model.contains("mimo") || model.contains("xiaomi") { return "xiaomi-mimo" }
-        if model.contains("glm") { return "glm" }
-        if model.contains("qwen") { return "qwen" }
-        switch agent {
-        case .claudeCode: return "anthropic"
-        case .codex: return "openai"
-        default: return fallback
-        }
-    }
-
-    private func normalizedModel(_ model: String?, providerID: String) -> String {
-        let value = model?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if value.isEmpty == false { return value }
-        switch providerID {
-        case "anthropic": return "claude-sonnet"
-        case "openai": return "gpt-5"
-        case "minimax": return "minimax-m1"
-        case "deepseek": return "deepseek-chat"
-        case "google": return "gemini-2.5-pro"
-        case "mistral": return "mistral-large-latest"
-        case "kimi": return "kimi-k2"
-        case "glm": return "glm-4.5"
-        default: return "unspecified"
-        }
-    }
-
     private func localUsageSessionKey(
         input: LocalAgentUsageIngest,
         agent: AgentProvider,
@@ -246,11 +183,32 @@ struct LocalUsageIngestionModule {
 
     private func workspaceIDMatching(path: String?, policies: [WorkspacePolicy]) -> String? {
         guard let path, path.isEmpty == false else { return nil }
-        let expanded = NSString(string: path).expandingTildeInPath
-        return policies.first { policy in
-            let policyPath = NSString(string: policy.pathHint).expandingTildeInPath
-            return expanded.hasPrefix(policyPath) || policyPath.hasPrefix(expanded)
-        }?.id
+        let candidateURL = normalizedFileURL(path)
+        let homeURL = normalizedFileURL(NSHomeDirectory())
+        return policies
+            .compactMap { policy -> (policy: WorkspacePolicy, components: Int)? in
+                let policyURL = normalizedFileURL(policy.pathHint)
+                guard policyURL.path != homeURL.path || policyURL.path == candidateURL.path else {
+                    return nil
+                }
+                let policyComponents = policyURL.pathComponents
+                let candidateComponents = candidateURL.pathComponents
+                guard candidateComponents.count >= policyComponents.count,
+                      Array(candidateComponents.prefix(policyComponents.count)) == policyComponents
+                else {
+                    return nil
+                }
+                return (policy, policyComponents.count)
+            }
+            .max { $0.components < $1.components }?
+            .policy.id
+    }
+
+    private func normalizedFileURL(_ path: String) -> URL {
+        URL(
+            fileURLWithPath: NSString(string: path).expandingTildeInPath,
+            isDirectory: true
+        ).standardizedFileURL
     }
 
     private func sourceDetail(
@@ -275,7 +233,7 @@ struct LocalUsageIngestionModule {
 
     private func title(_ value: String) -> String {
         let words = value.replacingOccurrences(of: "_", with: "-").split(separator: "-")
-        guard words.isEmpty == false else { return "Workspace" }
+        guard words.isEmpty == false else { return "Provider" }
         return words.map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined(separator: " ")
     }
 

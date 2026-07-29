@@ -3,6 +3,7 @@ import AppKit
 
 struct MenuBarPopoverView: View {
     @EnvironmentObject private var appState: AppState
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         VStack(spacing: 0) {
@@ -64,7 +65,7 @@ struct MenuBarPopoverView: View {
             Spacer()
             Button(appState.localized("settings")) {
                 NSApp.activate(ignoringOtherApps: true)
-                NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+                openSettings()
             }
             Button(appState.localized("quit")) {
                 NSApp.terminate(nil)

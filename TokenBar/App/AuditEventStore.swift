@@ -27,7 +27,7 @@ struct AuditEventStore {
         case .loaded(let events):
             saved = events
         }
-        let cleaned = Self.pruned(Self.removingDemoEvents(saved), limit: limit)
+        let cleaned = Self.pruned(saved, limit: limit)
         if cleaned.count != saved.count {
             save(cleaned)
         }
@@ -35,7 +35,7 @@ struct AuditEventStore {
     }
 
     func save(_ events: [AuditEvent]) {
-        try? document.save(Self.pruned(Self.removingDemoEvents(events), limit: limit))
+        document.saveRecovering(Self.pruned(events, limit: limit))
     }
 
     private static func pruned(_ events: [AuditEvent], limit: Int) -> [AuditEvent] {
@@ -44,20 +44,4 @@ struct AuditEventStore {
         return Array(sorted.prefix(limit))
     }
 
-    private static func removingDemoEvents(_ events: [AuditEvent]) -> [AuditEvent] {
-        events.filter { event in
-            demoEventMarkers.contains { marker in
-                event.detail.localizedCaseInsensitiveContains(marker)
-                    || event.provider.localizedCaseInsensitiveContains(marker)
-            } == false
-        }
-    }
-
-    private static let demoEventMarkers = [
-        "Client App",
-        "Personal Lab",
-        "Production Fix",
-        "Ship Client",
-        "claude-opus"
-    ]
 }

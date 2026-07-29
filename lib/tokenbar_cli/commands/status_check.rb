@@ -44,6 +44,7 @@ module TokenBarCLI
         }
         check_options = {
           codex_hook_json: false,
+          prompt_stdin: false,
           prompt: ENV["TOKENBAR_PROMPT"],
           prompt_file: ENV["TOKENBAR_PROMPT_FILE"],
           provider_explicit: !blank?(ENV["TOKENBAR_PROVIDER"]),
@@ -63,6 +64,7 @@ module TokenBarCLI
           opts.on("--key-source SOURCE", "Key provenance, such as codex_managed, company_managed, env, or personal") { |value| input["keySource"] = value }
           opts.on("--prompt TEXT", "Prompt text used to estimate Codex runs when cost/tokens are omitted") { |value| check_options[:prompt] = value }
           opts.on("--prompt-file PATH", "Read prompt text from PATH for Codex estimates") { |value| check_options[:prompt_file] = value }
+          opts.on("--prompt-stdin", "Read prompt text from stdin") { check_options[:prompt_stdin] = true }
           opts.on("--codex-hook-json", "Read Codex UserPromptSubmit JSON from stdin and estimate missing cost/tokens") { check_options[:codex_hook_json] = true }
           opts.on("--intent INTENT", "Run intent, such as refactor or debug") { |value| input["intent"] = value }
           opts.on("--json", "Print machine-readable JSON") { output_json = true }
@@ -73,6 +75,10 @@ module TokenBarCLI
         end
         parser.parse!(argv)
 
+        if check_options[:codex_hook_json] && check_options[:prompt_stdin]
+          raise Error, "--prompt-stdin and --codex-hook-json cannot be used together"
+        end
+        check_options[:prompt] = read_required_stdin("prompt text") if check_options[:prompt_stdin]
         hook_payload = check_options[:codex_hook_json] ? read_stdin_json : {}
         apply_codex_prompt_payload!(input, check_options, hook_payload)
         config = load_config(options[:config_path])
@@ -87,7 +93,8 @@ module TokenBarCLI
         input["estimatedTokens"] ||= 0
         validate_check_input!(input)
 
-        response = post_policy_evaluate(options[:api_url], input)
+        evaluation = post_policy_evaluate(options[:api_url], input)
+        response = evaluation.body
         source = "local_api"
         fallback_reason = nil
 
@@ -97,11 +104,11 @@ module TokenBarCLI
         end
 
         unless response
-          raise Error, "#{api_failure_message("policy checks require the app API")} and no tokenbar.yml was found" unless config
+          raise Error, "#{evaluation.failure_message("policy checks require the app API")} and no tokenbar.yml was found" unless config
 
           response = offline_policy_response(input, config)
           source = "tokenbar_yml"
-          fallback_reason ||= @last_api_error if @last_api_error
+          fallback_reason ||= evaluation.error if evaluation.error
         end
 
         response["source"] = source

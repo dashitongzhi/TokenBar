@@ -7,6 +7,7 @@ mkdir -p "$BUILD_DIR"
 
 SOURCES=(
   "$ROOT_DIR/TokenBar/Services/CCSwitchDatabase.swift"
+  "$ROOT_DIR/TokenBar/Services/CCSwitchProviderNormalizer.swift"
   "$ROOT_DIR/script/verify_ccswitch_database.swift"
 )
 swiftc "${SOURCES[@]}" -lsqlite3 -o "$BUILD_DIR/verify_ccswitch_database"

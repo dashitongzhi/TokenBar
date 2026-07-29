@@ -10,7 +10,7 @@ if [[ -d /Applications/Xcode.app ]]; then
 fi
 
 swiftc \
-  "$ROOT_DIR/TokenBar/App/MiniMaxQuotaAuditSemantics.swift" \
+  "$ROOT_DIR/TokenBar/Core/MiniMaxQuotaAuditSemantics.swift" \
   "$ROOT_DIR/script/verify_minimax_ccswitch_fallback_audit.swift" \
   -o "$BUILD_DIR/verify_minimax_ccswitch_fallback_audit"
 

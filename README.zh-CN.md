@@ -30,9 +30,13 @@
   <span> | </span>
   <a href="#本地-api">本地 API</a>
   <span> | </span>
-  <a href="#agent-hooks">Agent Hooks</a>
+  <a href="#智能体钩子">智能体钩子</a>
   <span> | </span>
-  <a href="README.design-system.md">设计规范</a>
+  <a href="docs/design-system.md">设计规范</a>
+  ·
+  <a href="LICENSE">许可证</a>
+  ·
+  <a href="THIRD_PARTY_NOTICES.md">第三方声明</a>
   <span> | </span>
   <a href="#数据来源">数据来源</a>
   <span> | </span>
@@ -181,7 +185,7 @@ TokenBar 只读取已启用功能所需的本机状态：
 
 TokenBar 不会把 prompts、transcripts、raw logs、本地路径、供应商 keys 或 usage records 上传到远程服务。
 
-## CLI Command Center
+## CLI 命令中心
 
 TokenBar 在 `bin/tokenbar` 提供一个无额外依赖的本地 CLI。
 
@@ -338,7 +342,7 @@ curl -X POST http://127.0.0.1:3847/policy/evaluate \
 }
 ```
 
-## Agent Hooks
+## 智能体钩子
 
 可工作的 hook 示例位于 `examples/hooks/`。
 
@@ -537,9 +541,7 @@ verifier 会运行 TokenBar 内置的 `--tokenbar-verify-local-api` 路径，不
 验证 first-run demo defaults 的本地升级路径：
 
 ```bash
-mkdir -p .build/verification
-swiftc TokenBar/App/AppPreferencesStore.swift script/verify_app_preferences_migration.swift -o .build/verification/verify_app_preferences_migration
-./.build/verification/verify_app_preferences_migration
+./script/verify_app_preferences_migration.sh
 ```
 
 这条路径会创建临时 `UserDefaults` suite，模拟已经带有 `removedDemoSeedDefaultsV1=true` 的旧安装，同时残留 demo `selectedProviderID`、`selectedWorkspaceID`、`selectedModel`、成本和会话预算。成功输出表示 V2 清理没有被旧 V1 标记短路，并且第二次加载保持稳定。

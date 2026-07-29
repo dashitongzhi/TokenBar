@@ -55,7 +55,7 @@ struct LocalAgentUsageLedgerStore {
     }
 
     private func save(_ ledger: [String: LocalAgentUsageCursor]) {
-        try? document.save(ledger)
+        document.saveRecovering(ledger)
     }
 
     private func pruned(_ ledger: [String: LocalAgentUsageCursor], now: Date) -> [String: LocalAgentUsageCursor] {

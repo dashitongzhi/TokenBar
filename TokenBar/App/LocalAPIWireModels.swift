@@ -1,6 +1,5 @@
 import Foundation
 
-@MainActor
 enum LocalAPIWire {
     struct Nullable<Value: Encodable>: Encodable {
         var value: Value?

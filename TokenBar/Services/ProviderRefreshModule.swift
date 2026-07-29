@@ -29,13 +29,18 @@ struct ProviderRefreshModule {
     private let miniMax = MiniMaxUsageService()
     private let ccSwitch = CCSwitchUsageService()
 
-    func refresh(providers: [ProviderUsage]) async -> ProviderRefreshOutcome {
+    func refresh(
+        providers: [ProviderUsage],
+        includeCCSwitchOfficialQuotaProbes: Bool = false
+    ) async -> ProviderRefreshOutcome {
         async let openAIResult = openAI.refresh()
         async let anthropicResult = anthropic.refresh()
         async let openRouterResult = openRouter.refresh()
         async let codexResult = codex.refresh()
         async let miniMaxResult = miniMax.refresh()
-        async let ccSwitchResult = ccSwitch.refresh()
+        async let ccSwitchResult = ccSwitch.refresh(
+            includeOfficialQuotaProbes: includeCCSwitchOfficialQuotaProbes
+        )
 
         return apply(ProviderRefreshResults(
             openAI: await openAIResult,
@@ -113,9 +118,9 @@ private struct RefreshState {
         switch result {
         case .success(let snapshot):
             providers[index].apply(snapshot: snapshot)
-            let primary = quotaWindowLabel(seconds: snapshot.primaryWindowSeconds, fallback: "5-hour")
+            let primary = QuotaWindowFormatting.label(seconds: snapshot.primaryWindowSeconds, fallback: "5-hour")
             let secondary = snapshot.secondaryUsedPercent.map {
-                ", \(quotaWindowLabel(seconds: snapshot.secondaryWindowSeconds, fallback: "7-day")) \(Int($0))%"
+                ", \(QuotaWindowFormatting.label(seconds: snapshot.secondaryWindowSeconds, fallback: "7-day")) \(Int($0))%"
             } ?? ""
             audit("Codex", "quota.live", "Fetched Codex quota: \(primary) \(Int(snapshot.primaryUsedPercent))%\(secondary)")
         case .unavailable(let detail):
@@ -229,17 +234,4 @@ private struct RefreshState {
         String(format: "%.2f", value)
     }
 
-    private func quotaWindowLabel(seconds: TimeInterval?, fallback: String) -> String {
-        guard let seconds, seconds > 0 else { return fallback }
-        if seconds >= 86_400 {
-            let days = max(Int(round(seconds / 86_400)), 1)
-            return days == 1 ? "1-day" : "\(days)-day"
-        }
-        if seconds >= 3_600 {
-            let hours = max(Int(round(seconds / 3_600)), 1)
-            return hours == 1 ? "1-hour" : "\(hours)-hour"
-        }
-        let minutes = max(Int(round(seconds / 60)), 1)
-        return minutes == 1 ? "1-minute" : "\(minutes)-minute"
-    }
 }

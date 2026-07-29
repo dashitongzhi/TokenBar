@@ -128,9 +128,8 @@ module TokenBarCLI
       puts "Smoke check: #{smoke["status"].to_s.upcase}"
       Array(smoke["reasons"]).each { |reason| puts "- #{reason}" }
       puts
-      config = load_config(payload["policy"])
-      provider = config.dig("providers", "preferred")
-      model = config.dig("models", "default") || default_model(provider)
+      provider = payload.dig("nextCheck", "provider")
+      model = payload.dig("nextCheck", "model")
       puts "Next: run tokenbar check --agent codex --provider #{provider} --model #{model}"
     end
 

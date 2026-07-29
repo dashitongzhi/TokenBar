@@ -1,0 +1,7 @@
+# path|why this file remains one coherent responsibility
+#
+# The verifier always enforces the hard limit. Add a soft-limit exemption only
+# when splitting the file would separate code that changes for the same reason.
+# Reasons shorter than 12 characters are rejected so exemptions remain useful
+# during review.
+TokenBar/Services/CCSwitchDatabase.swift|One SQLite boundary owns snapshot copying, schema compatibility, row decoding, and database error propagation.

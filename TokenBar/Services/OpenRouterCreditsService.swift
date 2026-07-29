@@ -48,6 +48,7 @@ struct OpenRouterCreditsService {
         }
 
         var request = URLRequest(url: url)
+        request.timeoutInterval = 15
         request.httpMethod = "GET"
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")

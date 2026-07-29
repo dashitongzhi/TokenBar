@@ -22,7 +22,7 @@ enum ProviderModelCatalogEndpointPolicy {
             throw ProviderModelCatalogEndpointError.untrustedBaseURL
         }
 
-        if let expectedHost = officialHosts[provider], host != expectedHost {
+        if let expectedHosts = officialHosts[provider], expectedHosts.contains(host) == false {
             throw ProviderModelCatalogEndpointError.untrustedBaseURL
         }
         return normalized
@@ -38,14 +38,14 @@ enum ProviderModelCatalogEndpointPolicy {
         "minimax": "https://api.minimax.io/v1"
     ]
 
-    private static let officialHosts = [
-        "openai": "api.openai.com",
-        "anthropic": "api.anthropic.com",
-        "openrouter": "openrouter.ai",
-        "deepseek": "api.deepseek.com",
-        "mistral": "api.mistral.ai",
-        "google": "generativelanguage.googleapis.com",
-        "minimax": "api.minimax.io"
+    private static let officialHosts: [String: Set<String>] = [
+        "openai": ["api.openai.com"],
+        "anthropic": ["api.anthropic.com"],
+        "openrouter": ["openrouter.ai"],
+        "deepseek": ["api.deepseek.com"],
+        "mistral": ["api.mistral.ai"],
+        "google": ["generativelanguage.googleapis.com"],
+        "minimax": ["api.minimax.io", "api.minimaxi.com"]
     ]
 }
 

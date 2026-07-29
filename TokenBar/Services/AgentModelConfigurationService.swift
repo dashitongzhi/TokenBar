@@ -59,7 +59,11 @@ struct AgentModelConfigurationService {
         return [
             configuredRow(
                 agent: .codex,
-                providerID: providerID(model: model, context: providerContext, fallback: providerHint ?? "openai"),
+                providerID: ProviderInference.providerID(
+                    model: model,
+                    hints: [providerContext.hint, providerContext.name, providerContext.baseURL],
+                    fallback: providerHint ?? "openai"
+                ),
                 model: model,
                 path: url.path,
                 now: fileModificationDate(url) ?? now
@@ -84,7 +88,7 @@ struct AgentModelConfigurationService {
             return models.map { model in
                 configuredRow(
                     agent: .claudeCode,
-                    providerID: providerID(model: model, context: ProviderContext(hint: nil, name: nil, baseURL: nil), fallback: "anthropic"),
+                    providerID: ProviderInference.providerID(model: model, fallback: "anthropic"),
                     model: model,
                     path: url.path,
                     now: updatedAt
@@ -113,55 +117,11 @@ struct AgentModelConfigurationService {
     }
 
     private func topLevelTOMLValues(in content: String) -> [String: String] {
-        var values: [String: String] = [:]
-        var isTopLevel = true
-
-        for rawLine in content.components(separatedBy: .newlines) {
-            let line = rawLine.split(separator: "#", maxSplits: 1).first.map(String.init) ?? ""
-            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed.isEmpty { continue }
-            if trimmed.hasPrefix("[") {
-                isTopLevel = false
-                continue
-            }
-            guard isTopLevel, let separator = trimmed.firstIndex(of: "=") else { continue }
-
-            let key = trimmed[..<separator].trimmingCharacters(in: .whitespacesAndNewlines)
-            let rawValue = trimmed[trimmed.index(after: separator)...].trimmingCharacters(in: .whitespacesAndNewlines)
-            let value = rawValue.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
-            if key.isEmpty == false && value.isEmpty == false {
-                values[key] = value
-            }
-        }
-
-        return values
+        MinimalTOMLReader.values(in: content, section: nil)
     }
 
     private func tomlTableValues(in content: String, path: [String]) -> [String: String] {
-        let target = path.joined(separator: ".")
-        var values: [String: String] = [:]
-        var inTarget = false
-
-        for rawLine in content.components(separatedBy: .newlines) {
-            let line = rawLine.split(separator: "#", maxSplits: 1).first.map(String.init) ?? ""
-            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed.isEmpty { continue }
-            if trimmed.hasPrefix("[") && trimmed.hasSuffix("]") {
-                let section = trimmed.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
-                inTarget = section == target
-                continue
-            }
-            guard inTarget, let separator = trimmed.firstIndex(of: "=") else { continue }
-
-            let key = trimmed[..<separator].trimmingCharacters(in: .whitespacesAndNewlines)
-            let rawValue = trimmed[trimmed.index(after: separator)...].trimmingCharacters(in: .whitespacesAndNewlines)
-            let value = rawValue.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
-            if key.isEmpty == false && value.isEmpty == false {
-                values[key] = value
-            }
-        }
-
-        return values
+        MinimalTOMLReader.values(in: content, section: path.joined(separator: "."))
     }
 
     private func modelStrings(in value: Any) -> [String] {
@@ -211,50 +171,6 @@ struct AgentModelConfigurationService {
             normalized.contains("minimax") ||
             normalized.contains("mistral") ||
             normalized.contains("kimi")
-    }
-
-    private func providerID(model: String, context: ProviderContext, fallback: String) -> String {
-        for hint in [context.hint, context.name, context.baseURL] {
-            if let known = knownProviderID(from: hint) {
-                return known
-            }
-        }
-
-        let normalized = model.lowercased()
-        if normalized.contains("claude") { return "anthropic" }
-        if normalized.contains("gpt") || normalized.contains("o1") || normalized.contains("o3") || normalized.contains("o4") { return "openai" }
-        if normalized.contains("minimax") { return "minimax" }
-        if normalized.contains("deepseek") { return "deepseek" }
-        if normalized.contains("gemini") { return "google" }
-        if normalized.contains("mistral") { return "mistral" }
-        if normalized.contains("kimi") { return "kimi" }
-        if normalized.contains("mimo") || normalized.contains("xiaomi") { return "xiaomi-mimo" }
-        if normalized.contains("glm") { return "glm" }
-        if normalized.contains("qwen") { return "qwen" }
-        return normalizedProviderAlias(fallback)
-    }
-
-    private func knownProviderID(from value: String?) -> String? {
-        guard let value else { return nil }
-        let normalized = value.lowercased()
-        if normalized.contains("anthropic") || normalized.contains("claude") { return "anthropic" }
-        if normalized.contains("openrouter") { return "openrouter" }
-        if normalized.contains("minimax") || normalized.contains("mini-max") || normalized.contains("minimaxi") { return "minimax" }
-        if normalized.contains("deepseek") { return "deepseek" }
-        if normalized.contains("mimo") || normalized.contains("xiaomi") { return "xiaomi-mimo" }
-        if normalized.contains("gemini") || normalized.contains("google") { return "google" }
-        if normalized.contains("mistral") { return "mistral" }
-        if normalized.contains("kimi") { return "kimi" }
-        if normalized.contains("glm") { return "glm" }
-        if normalized.contains("qwen") { return "qwen" }
-        if normalized.contains("openai") { return "openai" }
-        return nil
-    }
-
-    private func normalizedProviderAlias(_ value: String) -> String {
-        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard normalized.isEmpty == false else { return "openai" }
-        return normalized.replacingOccurrences(of: "_", with: "-")
     }
 
     private func deduplicated(_ rows: [ModelUsageRollup]) -> [ModelUsageRollup] {

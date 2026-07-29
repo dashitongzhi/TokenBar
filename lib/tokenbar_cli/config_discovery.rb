@@ -4,8 +4,8 @@ module TokenBarCLI
   module ConfigDiscovery
     def infer_workspace_policy(cwd)
       signals = []
-      signals.concat(codex_config_signals)
-      signals.concat(claude_config_signals)
+      signals.concat(codex_config_signals(cwd))
+      signals.concat(claude_config_signals(cwd))
       signals.concat(cc_switch_config_signals)
       signals = signals.select { |signal| !blank?(signal[:provider]) && !blank?(signal[:model]) }
       preferred = signals.min_by { |signal| [signal[:rank], signal[:model].to_s] }
@@ -30,25 +30,24 @@ module TokenBarCLI
       }
     end
 
-    def codex_config_signals
-      path = Pathname.new("~/.codex/config.toml").expand_path
-      return [] unless path.file?
+    def codex_config_signals(cwd = nil)
+      config_paths(cwd, ".codex/config.toml", "~/.codex/config.toml").flat_map.with_index do |path, rank|
+        next [] unless path.file?
 
-      values = top_level_toml_values(path.read)
-      model = values["model"]
-      return [] if blank?(model)
+        values = top_level_toml_values(path.read)
+        model = values["model"]
+        next [] if blank?(model)
 
-      provider = provider_from_hint_or_model(values["model_provider"] || values["modelProvider"], model, "openai")
-      [{ agent: "codex", provider: provider, model: model, path: path.to_s, rank: 0 }]
-    rescue SystemCallError
-      []
+        provider = provider_from_hint_or_model(values["model_provider"] || values["modelProvider"], model, "openai")
+        [{ agent: "codex", provider: provider, model: model, path: path.to_s, rank: rank }]
+      rescue SystemCallError
+        []
+      end
     end
 
-    def claude_config_signals
-      paths = [
-        Pathname.new("~/.claude/settings.json").expand_path,
-        Pathname.new("~/.claude/config.json").expand_path
-      ]
+    def claude_config_signals(cwd = nil)
+      workspace_path = Pathname.new(cwd).expand_path.to_s if cwd
+      paths = config_paths(cwd, ".claude/settings.json", "~/.claude/settings.json", "~/.claude/config.json")
       paths.flat_map do |path|
         next [] unless path.file?
 
@@ -59,7 +58,7 @@ module TokenBarCLI
             provider: provider_from_hint_or_model(nil, model, "anthropic"),
             model: model,
             path: path.to_s,
-            rank: 1
+            rank: workspace_path && path.to_s.start_with?(workspace_path) ? 0 : 1
           }
         end
       rescue JSON::ParserError, SystemCallError
@@ -149,29 +148,11 @@ module TokenBarCLI
     end
 
     def looks_like_model?(value)
-      normalized = value.to_s.strip.downcase
-      return false if normalized.length < 2 || normalized.length > 120
-
-      %w[claude gpt o1 o3 o4 gemini deepseek minimax mistral kimi mimo xiaomi glm qwen].any? do |marker|
-        normalized.include?(marker)
-      end
+      ProviderCatalog.looks_like_model?(value)
     end
 
     def provider_from_hint_or_model(hint, model, fallback)
-      haystack = [hint, model].compact.join(" ").downcase
-      return "anthropic" if haystack.include?("anthropic") || haystack.include?("claude")
-      return "openai" if haystack.include?("openai") || haystack.include?("gpt") || haystack.match?(/\bo[134]\b/)
-      return "openrouter" if haystack.include?("openrouter")
-      return "minimax" if haystack.include?("minimax")
-      return "deepseek" if haystack.include?("deepseek")
-      return "google" if haystack.include?("gemini") || haystack.include?("google")
-      return "mistral" if haystack.include?("mistral")
-      return "kimi" if haystack.include?("kimi")
-      return "xiaomi-mimo" if haystack.include?("mimo") || haystack.include?("xiaomi")
-      return "glm" if haystack.include?("glm")
-      return "qwen" if haystack.include?("qwen")
-
-      fallback
+      ProviderCatalog.provider_for(hint: hint, model: model, fallback: fallback)
     end
 
     def policy_provider_id(provider)
@@ -202,6 +183,17 @@ module TokenBarCLI
         seen[item] = true
         memo << item
       end
+    end
+
+    def config_paths(cwd, *paths)
+      expanded = paths.map do |path|
+        if path.start_with?("~")
+          Pathname.new(path).expand_path
+        elsif cwd
+          Pathname.new(cwd).expand_path.join(path)
+        end
+      end.compact
+      expanded.uniq
     end
   end
 end

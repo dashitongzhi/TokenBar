@@ -13,6 +13,7 @@ swiftc \
   "$ROOT_DIR/TokenBar/Core/WorkspacePolicyModels.swift" \
   "$ROOT_DIR"/TokenBar/App/LocalAPIWire*Models.swift \
   "$ROOT_DIR/TokenBar/App/LocalAPIPayloadBuilder.swift" \
+  "$ROOT_DIR/script/support/usage_snapshot_stubs.swift" \
   "$ROOT_DIR/script/verify_local_api_provider_health_quotas.swift" \
   -o "$BUILD_DIR/verify_local_api_provider_health_quotas"
 

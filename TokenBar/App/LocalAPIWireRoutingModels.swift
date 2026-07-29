@@ -1,6 +1,5 @@
 import Foundation
 
-@MainActor
 extension LocalAPIWire {
     struct SmartRoutingRun: Encodable {
         var id: String

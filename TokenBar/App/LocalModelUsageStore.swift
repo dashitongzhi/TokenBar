@@ -78,7 +78,7 @@ struct LocalModelUsageStore {
     }
 
     private func save(_ rollups: [ModelUsageRollup]) {
-        try? document.save(rollups)
+        document.saveRecovering(rollups)
     }
 
     private func resetExpiredBuckets(_ rollup: inout ModelUsageRollup, day: String, month: String) {

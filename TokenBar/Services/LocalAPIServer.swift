@@ -10,13 +10,18 @@ final class LocalAPIServer {
 
     private let appState: AppState
     private let tokenStore: LocalAPITokenStore
-    private let application: LocalAPIApplication
+    private nonisolated let application: LocalAPIApplication
     private var listener: NWListener?
     private let queue = DispatchQueue(label: "TokenBar.LocalAPIServer")
     private let logger = Logger(subsystem: "Kral.TokenBar", category: "LocalAPIServer")
+    private nonisolated let connectionLimiter = ConnectionLimiter(limit: 32)
 
     private nonisolated static var isVerifyMode: Bool {
+        #if DEBUG
         CommandLine.arguments.contains("--tokenbar-verify-local-api")
+        #else
+        false
+        #endif
     }
 
     private nonisolated static func verifyLog(_ message: String) {
@@ -37,6 +42,30 @@ final class LocalAPIServer {
 
         func cancel() {
             workItem.cancel()
+        }
+    }
+
+    private nonisolated final class ConnectionLimiter: @unchecked Sendable {
+        private let lock = NSLock()
+        private let limit: Int
+        private var active = Set<ObjectIdentifier>()
+
+        init(limit: Int) {
+            self.limit = limit
+        }
+
+        func acquire(_ connection: NWConnection) -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            guard active.count < limit else { return false }
+            active.insert(ObjectIdentifier(connection))
+            return true
+        }
+
+        func release(_ connection: NWConnection) {
+            lock.lock()
+            active.remove(ObjectIdentifier(connection))
+            lock.unlock()
         }
     }
 
@@ -93,7 +122,7 @@ final class LocalAPIServer {
             self.listener = listener
         } catch {
             appState.setLocalAPIStatus(.failed(error.localizedDescription))
-            print("TokenBar Local API failed to start: \(error)")
+            logger.error("TokenBar Local API failed to start: \(error.localizedDescription, privacy: .private)")
             Self.verifyLog("local API failed to start: \(error)")
         }
     }
@@ -109,7 +138,19 @@ final class LocalAPIServer {
             connection.cancel()
             return
         }
+        guard connectionLimiter.acquire(connection) else {
+            connection.cancel()
+            return
+        }
 
+        connection.stateUpdateHandler = { [weak self, weak connection] state in
+            guard let self, let connection else { return }
+            if case .failed = state {
+                self.connectionLimiter.release(connection)
+            } else if case .cancelled = state {
+                self.connectionLimiter.release(connection)
+            }
+        }
         connection.start(queue: queue)
         let timeout = ConnectionReadDeadline(connection: connection)
         timeout.schedule(on: queue)
@@ -162,11 +203,16 @@ final class LocalAPIServer {
         request: LocalAPIRequest?,
         response: LocalAPIResponse?
     ) {
-        Task { @MainActor in
-            let routed = response ?? self.application.handle(request)
+        Task.detached(priority: .userInitiated) { [application, queue] in
+            let routed: LocalAPIResponse
+            if let response {
+                routed = response
+            } else {
+                routed = await application.handle(request)
+            }
             let data = LocalAPIHTTPCodec.responseData(response: routed, request: request)
             connection.send(content: data, completion: .contentProcessed { _ in
-                self.queue.asyncAfter(deadline: .now() + 0.05) {
+                queue.asyncAfter(deadline: .now() + 0.05) {
                     connection.cancel()
                 }
             })

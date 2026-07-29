@@ -195,7 +195,8 @@ private extension KeyedDecodingContainer {
             return value
         }
         if let value = try? decodeIfPresent(Double.self, forKey: key) {
-            return Int(value)
+            guard value.isFinite else { return nil }
+            return Int(exactly: value)
         }
         if let value = try? decodeIfPresent(String.self, forKey: key) {
             return Int(value)

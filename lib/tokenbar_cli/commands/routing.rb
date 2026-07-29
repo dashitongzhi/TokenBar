@@ -85,8 +85,9 @@ module TokenBarCLI
         attach_routing_config!(input, config)
         validate_routing_input!(input)
 
-        response = post_smart_routing_run(options[:api_url], input)
-        raise Error, api_failure_message("smart routing run recording requires the app API") unless response
+        result = post_smart_routing_run(options[:api_url], input)
+        response = result.body
+        raise Error, result.failure_message("smart routing run recording requires the app API") unless response
 
         if output_json
           puts JSON.pretty_generate(response)
@@ -107,8 +108,9 @@ module TokenBarCLI
         end
         parser.parse!(argv)
 
-        response = fetch_smart_routing_stats(options[:api_url])
-        raise Error, api_failure_message("smart routing stats require the app API") unless response
+        result = fetch_smart_routing_stats(options[:api_url])
+        response = result.body
+        raise Error, result.failure_message("smart routing stats require the app API") unless response
 
         if output_json
           puts JSON.pretty_generate(response)

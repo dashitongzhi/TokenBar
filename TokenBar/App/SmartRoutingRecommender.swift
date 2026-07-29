@@ -99,13 +99,13 @@ struct SmartRoutingRecommender {
     private func candidates(context: SmartRoutingContext, workspace: WorkspacePolicy?) -> [Candidate] {
         var values: [Candidate] = []
         func add(providerID: String?, model: String?, sourceRank: Int) {
-            let provider = normalizedProviderID(
-                providerID,
+            let provider = ProviderInference.providerID(
+                explicit: providerID,
                 model: model,
                 agent: context.input.agent,
                 fallback: context.fallbackProviderID
             )
-            let model = normalizedModel(model, providerID: provider)
+            let model = ProviderInference.model(model, providerID: provider)
             guard model != "unspecified" else { return }
             values.append(Candidate(providerID: provider, model: model, sourceRank: sourceRank))
         }
@@ -182,47 +182,6 @@ struct SmartRoutingRecommender {
         return nil
     }
 
-    private func normalizedProviderID(
-        _ providerID: String?,
-        model: String?,
-        agent: AgentProvider?,
-        fallback: String
-    ) -> String {
-        let provider = providerID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if let provider, provider.isEmpty == false { return provider }
-        let model = model?.lowercased() ?? ""
-        if model.contains("claude") { return "anthropic" }
-        if model.contains("gpt") || model.contains("o1") || model.contains("o3") || model.contains("o4") { return "openai" }
-        if model.contains("minimax") { return "minimax" }
-        if model.contains("deepseek") { return "deepseek" }
-        if model.contains("gemini") { return "google" }
-        if model.contains("mistral") { return "mistral" }
-        if model.contains("kimi") { return "kimi" }
-        if model.contains("mimo") || model.contains("xiaomi") { return "xiaomi-mimo" }
-        if model.contains("glm") { return "glm" }
-        if model.contains("qwen") { return "qwen" }
-        switch agent {
-        case .claudeCode: return "anthropic"
-        case .codex: return "openai"
-        default: return fallback
-        }
-    }
-
-    private func normalizedModel(_ model: String?, providerID: String) -> String {
-        let value = model?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if value.isEmpty == false { return value }
-        switch providerID {
-        case "anthropic": return "claude-sonnet"
-        case "openai": return "gpt-5"
-        case "minimax": return "minimax-m1"
-        case "deepseek": return "deepseek-chat"
-        case "google": return "gemini-2.5-pro"
-        case "mistral": return "mistral-large-latest"
-        case "kimi": return "kimi-k2"
-        case "glm": return "glm-4.5"
-        default: return "unspecified"
-        }
-    }
 }
 
 private struct Candidate {

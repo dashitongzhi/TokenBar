@@ -60,6 +60,7 @@ struct ProviderModelCatalogService {
     private func fetchOpenAICompatible(providerID: String, baseURL: String, apiKey: String?, now: Date) async throws -> [ModelCatalogItem] {
         let url = try modelsURL(baseURL: baseURL)
         var request = URLRequest(url: url)
+        request.timeoutInterval = 15
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if let apiKey, apiKey.isEmpty == false {
             request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
@@ -74,6 +75,7 @@ struct ProviderModelCatalogService {
     private func fetchAnthropic(baseURL: String, apiKey: String, now: Date) async throws -> [ModelCatalogItem] {
         let url = try modelsURL(baseURL: baseURL)
         var request = URLRequest(url: url)
+        request.timeoutInterval = 15
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
@@ -85,11 +87,13 @@ struct ProviderModelCatalogService {
     }
 
     private func fetchGemini(baseURL: String, apiKey: String, now: Date) async throws -> [ModelCatalogItem] {
-        var components = URLComponents(string: normalizedBaseURL(baseURL) + "/models")
-        components?.queryItems = [URLQueryItem(name: "key", value: apiKey)]
-        guard let url = components?.url else { throw ModelCatalogError.invalidURL }
+        guard let url = URL(string: normalizedBaseURL(baseURL) + "/models") else {
+            throw ModelCatalogError.invalidURL
+        }
         var request = URLRequest(url: url)
+        request.timeoutInterval = 15
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
         let data = try await data(for: request)
         let decoded = try JSONDecoder().decode(FlexibleModelsResponse.self, from: data)
         return decoded.modelIDs.map {
@@ -139,10 +143,10 @@ struct ProviderModelCatalogService {
             candidates = []
         }
         for key in candidates {
-            if let value = try? await KeychainService.shared.retrieve(key: key), value.isEmpty == false {
+            if let value = env[key], value.isEmpty == false {
                 return value
             }
-            if let value = env[key], value.isEmpty == false {
+            if let value = try? await KeychainService.shared.retrieve(key: key), value.isEmpty == false {
                 return value
             }
         }

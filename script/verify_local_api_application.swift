@@ -70,44 +70,51 @@ private final class FakeLocalAPIState: LocalAPIApplicationState {
 @main
 @MainActor
 struct VerifyLocalAPIApplication {
-    static func main() throws {
+    static func main() async throws {
         let token = "verification-token"
         let state = FakeLocalAPIState()
+        let authorizationProbe = AuthorizationProbe()
         let application = LocalAPIApplication(
             state: state,
-            authorizationToken: { token }
+            authorizationToken: {
+                authorizationProbe.recordCurrentThread()
+                return token
+            }
         )
 
-        try expect(application.handle(nil).statusCode == 400, "nil request must be rejected")
+        let malformed = await application.handle(nil)
+        try expect(malformed.statusCode == 400, "nil request must be rejected")
 
-        let health = application.handle(request(method: "GET", path: "/health"))
+        let health = await application.handle(request(method: "GET", path: "/health"))
         try expect(health.statusCode == 200, "health must remain unauthenticated")
+        let invalidHealthMethod = await application.handle(request(method: "POST", path: "/health"))
         try expect(
-            application.handle(request(method: "POST", path: "/health")).statusCode == 405,
+            invalidHealthMethod.statusCode == 405,
             "health must reject unsupported methods"
         )
 
-        let preflight = application.handle(request(
+        let preflight = await application.handle(request(
             method: "OPTIONS",
             path: "/quotas",
             origin: "http://localhost:4321"
         ))
         try expect(preflight.statusCode == 204, "local preflight must be accepted")
 
-        let remoteOrigin = application.handle(request(
+        let remoteOrigin = await application.handle(request(
             method: "GET",
             path: "/health",
             origin: "https://example.com"
         ))
         try expect(remoteOrigin.statusCode == 403, "remote origins must be rejected")
 
+        let unauthorized = await application.handle(request(method: "GET", path: "/quotas"))
         try expect(
-            application.handle(request(method: "GET", path: "/quotas")).statusCode == 401,
+            unauthorized.statusCode == 401,
             "protected routes must require a bearer token"
         )
 
         state.shouldFailPolicyEncoding = true
-        let failedPolicy = application.handle(authorizedRequest(method: "GET", path: "/policy", token: token))
+        let failedPolicy = await application.handle(authorizedRequest(method: "GET", path: "/policy", token: token))
         try expect(failedPolicy.statusCode == 500, "payload encoding failures must return HTTP 500")
         try expect(
             String(decoding: failedPolicy.body, as: UTF8.self).contains("payload_encoding_failed"),
@@ -115,17 +122,17 @@ struct VerifyLocalAPIApplication {
         )
         state.shouldFailPolicyEncoding = false
 
-        let quotas = application.handle(authorizedRequest(method: "GET", path: "/quotas", token: token))
+        let quotas = await application.handle(authorizedRequest(method: "GET", path: "/quotas", token: token))
         try expect(quotas.statusCode == 200, "authorized quota request must succeed")
         try expect(state.lastQuotaProviderID == nil, "all quotas must not set a provider filter")
 
-        let providerQuotas = application.handle(
+        let providerQuotas = await application.handle(
             authorizedRequest(method: "GET", path: "/quotas/openai", token: token)
         )
         try expect(providerQuotas.statusCode == 200, "provider quota request must succeed")
         try expect(state.lastQuotaProviderID == "openai", "provider quota route must preserve provider id")
 
-        let pace = application.handle(
+        let pace = await application.handle(
             authorizedRequest(method: "GET", path: "/pace/minimax", token: token)
         )
         try expect(pace.statusCode == 200, "provider pace request must succeed")
@@ -141,7 +148,7 @@ struct VerifyLocalAPIApplication {
             intent: "verification"
         )
         let policyBody = try JSONEncoder().encode(policyInput)
-        let decision = application.handle(authorizedRequest(
+        let decision = await application.handle(authorizedRequest(
             method: "POST",
             path: "/policy/evaluate",
             token: token,
@@ -153,16 +160,46 @@ struct VerifyLocalAPIApplication {
             "policy application seam must receive the decoded input"
         )
 
-        let invalidDecision = application.handle(authorizedRequest(
+        let invalidDecision = await application.handle(authorizedRequest(
             method: "POST",
             path: "/policy/evaluate",
             token: token,
             body: Data("{}".utf8)
         ))
         try expect(invalidDecision.statusCode == 400, "invalid policy input must be rejected")
+        try expect(
+            authorizationProbe.observedMainThread == false,
+            "authorization and route dispatch must execute away from the main thread"
+        )
+        try await verifyConcurrentRouting(application: application, token: token)
 
         try verifyHTTPCodec()
         print("Verified Local API application routing, authorization, origin policy, and HTTP framing.")
+    }
+
+    private static func verifyConcurrentRouting(
+        application: LocalAPIApplication,
+        token: String
+    ) async throws {
+        let statuses = await withTaskGroup(of: Int.self, returning: [Int].self) { group in
+            for index in 0..<128 {
+                group.addTask {
+                    let request = index.isMultiple(of: 4)
+                        ? authorizedRequest(method: "GET", path: "/quotas", token: token)
+                        : request(method: "GET", path: "/health")
+                    return await application.handle(request).statusCode
+                }
+            }
+            var values: [Int] = []
+            for await status in group {
+                values.append(status)
+            }
+            return values
+        }
+        try expect(
+            statuses.count == 128 && statuses.allSatisfy { $0 == 200 },
+            "concurrent health and state-backed routes must complete successfully"
+        )
     }
 
     private static func verifyHTTPCodec() throws {
@@ -205,7 +242,7 @@ struct VerifyLocalAPIApplication {
         )
     }
 
-    private static func authorizedRequest(
+    nonisolated private static func authorizedRequest(
         method: String,
         path: String,
         token: String,
@@ -219,7 +256,7 @@ struct VerifyLocalAPIApplication {
         )
     }
 
-    private static func request(
+    nonisolated private static func request(
         method: String,
         path: String,
         origin: String? = nil,
@@ -245,5 +282,22 @@ struct VerifyLocalAPIApplication {
         guard try condition() else {
             throw VerificationFailure(description: message)
         }
+    }
+}
+
+private final class AuthorizationProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var samples: [Bool] = []
+
+    var observedMainThread: Bool? {
+        lock.lock()
+        defer { lock.unlock() }
+        return samples.last
+    }
+
+    func recordCurrentThread() {
+        lock.lock()
+        samples.append(Thread.isMainThread)
+        lock.unlock()
     }
 }

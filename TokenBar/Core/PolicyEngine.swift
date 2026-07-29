@@ -9,18 +9,21 @@ struct PolicyEngine {
         projectedSessionSpend: Double,
         sessionBudget: Double
     ) -> PolicyDecision {
-        let workspace = workspaces.first { $0.id == input.workspaceID }
-            ?? selectedWorkspace
+        let requestedWorkspaceID = input.workspaceID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let matchedWorkspace = workspaces.first { $0.id == requestedWorkspaceID }
+        let workspaceWasUnknown = requestedWorkspaceID.isEmpty == false && matchedWorkspace == nil
+        let workspace = matchedWorkspace
+            ?? (requestedWorkspaceID.isEmpty ? selectedWorkspace : nil)
             ?? WorkspacePolicy(
-                id: "local-workspace",
-                name: "Local Workspace",
-                pathHint: "~",
+                id: requestedWorkspaceID.isEmpty ? "local-workspace" : requestedWorkspaceID,
+                name: requestedWorkspaceID.isEmpty ? "Local Workspace" : "Unknown Workspace",
+                pathHint: "",
                 client: "local",
                 dailyBudget: 0,
                 monthlyBudget: 0,
                 spendToday: 0,
                 spendMonth: 0,
-                allowedProviderIDs: [input.providerID],
+                allowedProviderIDs: requestedWorkspaceID.isEmpty ? [input.providerID] : [],
                 blockedModels: [],
                 maxEstimatedRunCost: 0,
                 requireCompanyKey: false
@@ -32,6 +35,11 @@ struct PolicyEngine {
             || input.model == "unspecified"
         var status: PolicyDecisionStatus = .allow
         var reasons: [String] = []
+
+        if workspaceWasUnknown {
+            status = .block
+            reasons.append("Requested workspace policy was not found.")
+        }
 
         if workspace.allowedProviderIDs.contains(input.providerID) == false {
             status = .block

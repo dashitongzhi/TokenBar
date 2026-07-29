@@ -197,7 +197,7 @@ elif [[ -n "${TOKENBAR_NOTARY_APPLE_ID:-}" || -n "${TOKENBAR_NOTARY_PASSWORD:-}"
   : "${TOKENBAR_NOTARY_TEAM_ID:?TOKENBAR_NOTARY_TEAM_ID is required when using Apple ID notarization}"
   notary_args=(
     --apple-id "$TOKENBAR_NOTARY_APPLE_ID"
-    --password "$TOKENBAR_NOTARY_PASSWORD"
+    --password "@env:TOKENBAR_NOTARY_PASSWORD"
     --team-id "$TOKENBAR_NOTARY_TEAM_ID"
   )
 fi
@@ -253,8 +253,11 @@ APP_BUNDLE="$ARCHIVE_PATH/Products/Applications/$APP_NAME.app"
 [[ -d "$APP_BUNDLE" ]] || fail "archive did not contain $APP_BUNDLE"
 
 INFO_PLIST="$APP_BUNDLE/Contents/Info.plist"
-VERSION="$(plutil -extract CFBundleShortVersionString raw "$INFO_PLIST" 2>/dev/null || printf '0')"
-BUILD="$(plutil -extract CFBundleVersion raw "$INFO_PLIST" 2>/dev/null || printf '0')"
+VERSION="$(plutil -extract CFBundleShortVersionString raw "$INFO_PLIST" 2>/dev/null)" \
+  || fail "archive Info.plist is missing CFBundleShortVersionString"
+BUILD="$(plutil -extract CFBundleVersion raw "$INFO_PLIST" 2>/dev/null)" \
+  || fail "archive Info.plist is missing CFBundleVersion"
+[[ -n "$VERSION" && -n "$BUILD" ]] || fail "archive version metadata must not be empty"
 DMG_PATH="$OUTPUT_DIR/$APP_NAME-$VERSION-$BUILD.dmg"
 
 log "Verifying app signature"

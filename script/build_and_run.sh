@@ -22,6 +22,7 @@ VERIFY_EXEC="$ROOT_DIR/.build/tokenbar-verify/$APP_NAME"
 VERIFY_ENTITLEMENTS="$ROOT_DIR/.build/tokenbar-verify.entitlements"
 VERIFY_STDOUT="$ROOT_DIR/.build/tokenbar-verify.stdout.log"
 VERIFY_STDERR="$ROOT_DIR/.build/tokenbar-verify.stderr.log"
+VERIFY_STATE_DIR="$ROOT_DIR/.build/tokenbar-verify-state"
 
 if [[ -d /Applications/Xcode.app ]]; then
   export DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
@@ -255,9 +256,15 @@ ENTITLEMENTS
   codesign --force --sign - --entitlements "$VERIFY_ENTITLEMENTS" "$VERIFY_EXEC" >/dev/null 2>&1 || fail "failed to ad-hoc sign verifier executable"
 
   stage "Launching $APP_NAME local API verification mode"
+  mkdir -p "$VERIFY_STATE_DIR"
+  rm -f \
+    "$VERIFY_STATE_DIR/local-api-token" \
+    "$VERIFY_STATE_DIR/smart-routing-runs.json" \
+    "$VERIFY_STATE_DIR/workspace-policies.json"
   : > "$VERIFY_STDOUT"
   : > "$VERIFY_STDERR"
-  "$VERIFY_EXEC" --tokenbar-verify-local-api >"$VERIFY_STDOUT" 2>"$VERIFY_STDERR" &
+  TOKENBAR_STATE_DIR="$VERIFY_STATE_DIR" \
+    "$VERIFY_EXEC" --tokenbar-verify-local-api >"$VERIFY_STDOUT" 2>"$VERIFY_STDERR" &
   VERIFY_APP_PID="$!"
 }
 
@@ -280,8 +287,8 @@ case "$MODE" in
     enable_local_api_for_verify
     open_verify_app
     verify_app
-    export TOKENBAR_API_TOKEN_PATH="$HOME/Library/Application Support/TokenBar/local-api-token"
-    export TOKENBAR_WORKSPACE_POLICY_STORE="$HOME/Library/Application Support/TokenBar/workspace-policies.json"
+    export TOKENBAR_API_TOKEN_PATH="$VERIFY_STATE_DIR/local-api-token"
+    export TOKENBAR_WORKSPACE_POLICY_STORE="$VERIFY_STATE_DIR/workspace-policies.json"
     stage "Running authenticated local API contract smoke"
     "$ROOT_DIR/script/smoke_local_api_contract.sh"
     stage "Running local API HTTP framing smoke"

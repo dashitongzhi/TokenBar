@@ -18,7 +18,9 @@ struct AnthropicUsageSnapshotMapper {
         var tokensToday = 0.0
         var requestsMonth = 0
         var requestsToday = 0
-        let todayStart = calendar.startOfDay(for: now)
+        var usageCalendar = Calendar(identifier: .gregorian)
+        usageCalendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let todayStart = usageCalendar.startOfDay(for: now)
 
         let history = sortedUsageBuckets.map { bucket in
             let bucketTokens = bucket.results.reduce(0.0) { $0 + $1.tokenTotal }

@@ -89,9 +89,13 @@ private struct APIMonitorCard: View {
             }
 
             HStack {
-                Link(appState.localized("source"), destination: URL(string: spec.docsURL)!)
+                if let docsURL = URL(string: spec.docsURL), docsURL.scheme != nil {
+                    Link(appState.localized("source"), destination: docsURL)
+                }
                 Spacer()
-                Link("Console", destination: URL(string: spec.subscriptionURL)!)
+                if let subscriptionURL = URL(string: spec.subscriptionURL), subscriptionURL.scheme != nil {
+                    Link("Console", destination: subscriptionURL)
+                }
             }
             .font(.caption.weight(.medium))
         }

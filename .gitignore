@@ -2,6 +2,7 @@
 dist/
 DerivedData/
 *.xcuserstate
+xcuserdata/
 *.profraw
 .DS_Store
 
@@ -12,8 +13,7 @@ DerivedData/
 .codex/*
 !.codex/hooks.json
 
-# Local notes and internal planning docs. README stays public.
-docs/
+# Local notes and internal planning docs.
 index.md
 STATUSBAR_FEATURE.md
 PHASE*_SUMMARY.md

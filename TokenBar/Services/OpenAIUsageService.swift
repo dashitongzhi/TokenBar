@@ -103,6 +103,7 @@ struct OpenAIUsageService {
         }
 
         var request = URLRequest(url: url)
+        request.timeoutInterval = 15
         request.httpMethod = "GET"
         request.setValue("Bearer \(adminKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -124,7 +125,9 @@ struct OpenAIUsageService {
         var tokensToday = 0.0
         var requestsMonth = 0
         var requestsToday = 0
-        let todayStart = calendar.startOfDay(for: now)
+        var usageCalendar = Calendar(identifier: .gregorian)
+        usageCalendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let todayStart = usageCalendar.startOfDay(for: now)
         let history = sortedUsageBuckets.map { bucket in
             let bucketTokens = bucket.results.reduce(0.0) { total, result in
                 total + result.tokenTotal

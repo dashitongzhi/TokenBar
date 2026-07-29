@@ -5,7 +5,8 @@ struct CompactQuotaWindowView: View {
 
     private var rows: [ProviderUsage] {
         Array(appState.providers.filter { provider in
-            provider.sourceKind == .live || provider.sourceKind == .ccSwitch || provider.id == "codex" || provider.id == "minimax"
+            provider.hasKnownQuotaLimit
+                && (provider.sourceKind == .live || provider.sourceKind == .ccSwitch)
         }.prefix(5))
     }
 

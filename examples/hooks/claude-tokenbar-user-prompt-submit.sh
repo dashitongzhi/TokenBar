@@ -2,6 +2,8 @@
 set -u
 
 INPUT="$(cat)"
+ERROR_FILE="$(mktemp "${TMPDIR:-/tmp}/tokenbar-claude-hook.XXXXXX")"
+trap 'rm -f "$ERROR_FILE"' EXIT
 
 block_invalid_input() {
   local reason="$1"
@@ -16,6 +18,30 @@ block_invalid_input() {
     })
   ' "$reason"
   exit 0
+}
+
+block_evaluation_failure() {
+  local context="$1"
+  ruby -rjson -e '
+    puts JSON.generate({
+      decision: "block",
+      reason: "TokenBar BLOCK: policy evaluation failed; refusing to run without a verified policy decision.",
+      hookSpecificOutput: {
+        hookEventName: "UserPromptSubmit",
+        additionalContext: ARGV.fetch(0)
+      }
+    })
+  ' "$context"
+  exit 0
+}
+
+decision_matches() {
+  local expected="$1"
+  ruby -rjson -e '
+    payload = JSON.parse(STDIN.read)
+    decision = payload.fetch("decision")
+    abort "unexpected decision" unless decision.fetch("status") == ARGV.fetch(0)
+  ' "$expected" 2>/dev/null
 }
 
 if ! PROMPT="$(ruby -rjson -e '
@@ -44,38 +70,45 @@ if [[ -z "$ESTIMATED_COST" ]]; then
 fi
 INTENT="${TOKENBAR_INTENT:-claude_prompt}"
 
-OUTPUT="$("$TOKENBAR_BIN" check \
+OUTPUT="$(printf "%s" "$PROMPT" | "$TOKENBAR_BIN" check \
   --agent claudeCode \
   --provider "$PROVIDER" \
   --model "$MODEL" \
   --estimated-cost "$ESTIMATED_COST" \
   --estimated-tokens "$ESTIMATED_TOKENS" \
-  --prompt "$PROMPT" \
+  --prompt-stdin \
   --intent "$INTENT" \
-  --json 2>&1)"
+  --json 2>"$ERROR_FILE")"
 STATUS=$?
+ERROR_OUTPUT="$(cat "$ERROR_FILE")"
 
 case "$STATUS" in
   0)
+    printf "%s" "$OUTPUT" | decision_matches allow ||
+      block_evaluation_failure "${ERROR_OUTPUT:-invalid ALLOW response from TokenBar}"
     exit 0
     ;;
   1)
-    ruby -rjson -e '
+    if ! printf "%s" "$OUTPUT" | ruby -rjson -e '
       payload = JSON.parse(ARGV.fetch(0))
       decision = payload.fetch("decision")
+      abort "unexpected decision" unless decision.fetch("status") == "warn"
       puts JSON.generate({
         hookSpecificOutput: {
           hookEventName: "UserPromptSubmit",
           additionalContext: "TokenBar WARN: #{decision.fetch("recommendation")}"
         }
       })
-    ' "$OUTPUT"
+    ' "$OUTPUT" 2>/dev/null; then
+      block_evaluation_failure "${ERROR_OUTPUT:-invalid WARN response from TokenBar}"
+    fi
     exit 0
     ;;
   2)
-    ruby -rjson -e '
+    if ! ruby -rjson -e '
       payload = JSON.parse(ARGV.fetch(0))
       decision = payload.fetch("decision")
+      abort "unexpected decision" unless decision.fetch("status") == "block"
       reasons = Array(decision["reasons"]).join(" ")
       puts JSON.generate({
         decision: "block",
@@ -85,11 +118,12 @@ case "$STATUS" in
           additionalContext: "TokenBar evaluated this prompt before Claude Code processed it."
         }
       })
-    ' "$OUTPUT"
+    ' "$OUTPUT" 2>/dev/null; then
+      block_evaluation_failure "${ERROR_OUTPUT:-invalid BLOCK response from TokenBar}"
+    fi
     exit 0
     ;;
   *)
-    ruby -rjson -e 'puts JSON.generate({ decision: "block", reason: "TokenBar BLOCK: policy evaluation failed; refusing to run without a verified policy decision.", hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: ARGV.fetch(0) } })' "$OUTPUT"
-    exit 0
+    block_evaluation_failure "${ERROR_OUTPUT:-$OUTPUT}"
     ;;
 esac

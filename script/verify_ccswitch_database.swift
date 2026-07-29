@@ -1,6 +1,16 @@
 import Foundation
 import SQLite3
 
+enum CCSwitchKnownProvider: Hashable {
+    case miniMax
+    case deepSeek
+    case xiaomiMiMo
+    case ccSwitchCodex
+    case glm
+    case openAI
+    case anthropic
+}
+
 private struct VerificationFailure: Error, CustomStringConvertible {
     let description: String
 }
@@ -27,7 +37,18 @@ struct VerifyCCSwitchDatabase {
             throw VerificationFailure(description: "provider fixture missing")
         }
         try expect(provider.id == "openai-fixture", "provider id must be preserved")
-        try expect(provider.apiKey == "fixture-secret", "provider key must decode from env")
+        try expect(
+            provider.apiKey(forProviderID: "openai") == "fixture-secret",
+            "provider-specific OpenAI key must decode from env"
+        )
+        try expect(
+            provider.apiKey(forProviderID: "deepseek") == nil,
+            "an OpenAI key must never be reused as a DeepSeek credential"
+        )
+        try expect(
+            provider.apiKey(forProviderID: "minimax") == nil,
+            "an OpenAI key must never be reused as a MiniMax credential"
+        )
         try expect(provider.baseURL == "https://api.openai.com/v1", "base URL must decode")
         try expect(provider.modelNames == ["gpt-5"], "configured models must decode")
         try expect(provider.dailySpendLimit == 12.5, "daily spend limit must load")
@@ -47,8 +68,95 @@ struct VerifyCCSwitchDatabase {
 
         let filtered = try database.load(since: "2026-08-01")
         try expect(filtered.dailyRollups.isEmpty, "start date must filter old rollups")
+        try verifyProviderNormalization()
 
         print("Verified CC Switch database provider, limits, rollup, and health adapter.")
+    }
+
+    private static func verifyProviderNormalization() throws {
+        let aggregator = CCSwitchProviderRecord(
+            id: "router-fixture",
+            appType: "claude",
+            name: "Multi-vendor Router",
+            config: [
+                "baseUrl": "https://router.example.test/v1",
+                "models": [
+                    ["id": "deepseek-chat"],
+                    ["id": "gpt-5"]
+                ]
+            ],
+            meta: [:],
+            dailySpendLimit: nil,
+            monthlySpendLimit: nil
+        )
+        try expect(
+            CCSwitchProviderNormalizer.normalize(record: aggregator) == nil,
+            "a heterogeneous aggregator record must not collapse to one provider"
+        )
+        var ambiguousIdentity = aggregator
+        ambiguousIdentity.id = "deepseek-openai-router"
+        try expect(
+            CCSwitchProviderNormalizer.normalize(record: ambiguousIdentity) == nil,
+            "an identity naming multiple providers must remain an aggregator"
+        )
+
+        let rollup = CCSwitchDailyRollup(
+            date: "2026-07-28",
+            appType: aggregator.appType,
+            providerID: aggregator.id,
+            model: "deepseek-chat",
+            requestCount: 1,
+            inputTokens: 1,
+            outputTokens: 1,
+            cacheReadTokens: 0,
+            cacheCreationTokens: 0,
+            totalCostUSD: 0
+        )
+        try expect(
+            CCSwitchProviderNormalizer.normalize(
+                rollup: rollup,
+                recordsByCompositeID: ["\(aggregator.appType):\(aggregator.id)": aggregator],
+                recordsByID: [aggregator.id: [aggregator]]
+            ) == .deepSeek,
+            "heterogeneous aggregator rollups must normalize from each rollup model"
+        )
+
+        let misleadingIdentity = CCSwitchProviderRecord(
+            id: "demo1",
+            appType: "proxy",
+            name: "Provider No1",
+            config: ["baseUrl": "https://router.example.test/v1"],
+            meta: [:],
+            dailySpendLimit: nil,
+            monthlySpendLimit: nil
+        )
+        try expect(
+            CCSwitchProviderNormalizer.normalize(record: misleadingIdentity) == nil,
+            "ordinary tokens containing o1 characters must not be classified as OpenAI"
+        )
+
+        for (model, expected) in [
+            ("gpt-5", CCSwitchKnownProvider.openAI),
+            ("glm-4.5", .glm),
+            ("claude-sonnet-4", .anthropic)
+        ] {
+            let record = CCSwitchProviderRecord(
+                id: "model-fixture",
+                appType: "proxy",
+                name: "Model Fixture",
+                config: [
+                    "baseUrl": "https://router.example.test/v1",
+                    "models": [["id": model]]
+                ],
+                meta: [:],
+                dailySpendLimit: nil,
+                monthlySpendLimit: nil
+            )
+            try expect(
+                CCSwitchProviderNormalizer.normalize(record: record) == expected,
+                "\(model) must normalize using token boundaries"
+            )
+        }
     }
 
     private static func createFixture(at path: String) throws {

@@ -4,17 +4,20 @@ import UserNotifications
 @MainActor
 final class NotificationService {
     static let shared = NotificationService()
-    private var notifiedKeys = Set<String>()
+    private var notifiedStatusesByProvider: [String: Set<UsageStatus>] = [:]
 
     private init() {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
     func notifyIfNeeded(appState: AppState) {
+        for provider in appState.providers where provider.status == .healthy {
+            notifiedStatusesByProvider.removeValue(forKey: provider.id)
+        }
         guard let provider = appState.mostUrgentProvider, provider.status != .healthy else { return }
         let key = "\(provider.id)-\(provider.status.rawValue)"
-        guard notifiedKeys.contains(key) == false else { return }
-        notifiedKeys.insert(key)
+        guard notifiedStatusesByProvider[provider.id, default: []].contains(provider.status) == false else { return }
+        notifiedStatusesByProvider[provider.id, default: []].insert(provider.status)
 
         let content = UNMutableNotificationContent()
         content.title = "TokenBar: \(provider.name) \(provider.status.rawValue)"

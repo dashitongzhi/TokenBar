@@ -13,8 +13,6 @@ extension AppState {
             isPersistenceSuppressedForVerification = wasPersistenceSuppressed
             providers = originalProviders
             auditEvents = originalAuditEvents
-            persistProviders()
-            auditEventStore.save(originalAuditEvents)
         }
 
         let now = Date(timeIntervalSince1970: 1_735_689_600)

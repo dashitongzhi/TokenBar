@@ -4,13 +4,14 @@ require "json"
 require "net/http"
 require "pathname"
 require "uri"
+require_relative "coercion"
 
 module TokenBarCLI
   class LocalAPIClient
     attr_reader :last_error
 
     def initialize(api_url, token_paths:, env: ENV)
-      @api_url = api_url
+      @base_uri = parse_base_uri(api_url)
       @token_paths = token_paths
       @env = env
       @last_error = nil
@@ -49,6 +50,8 @@ module TokenBarCLI
         "TokenBar local API rejected the payload; #{action}"
       when "http_404", "http_405"
         "TokenBar local API route or method is not supported by the running app; #{action}"
+      when "invalid_json"
+        "A service answered at the TokenBar API URL but returned invalid JSON; confirm the URL and that the port is not used by another service; #{action}"
       when /\Ahttp_(\d{3})\z/
         "TokenBar local API returned HTTP #{Regexp.last_match(1)}; #{action}"
       else
@@ -63,6 +66,7 @@ module TokenBarCLI
 
       JSON.parse(response.body)
     rescue JSON::ParserError
+      @last_error = "invalid_json"
       nil
     end
 
@@ -115,14 +119,29 @@ module TokenBarCLI
     end
 
     def endpoint(path)
-      base = URI(@api_url)
-      base.path = path
+      base = @base_uri.dup
+      prefix = base.path.to_s.sub(%r{\A/+}, "").sub(%r{/+\z}, "")
+      suffix = path.to_s.sub(%r{\A/+}, "")
+      base.path = "/#{[prefix, suffix].reject(&:empty?).join("/")}"
       base.query = nil
+      base.fragment = nil
       base
     end
 
     def blank?(value)
-      value.nil? || value.to_s.strip.empty?
+      Coercion.blank?(value)
+    end
+
+    def parse_base_uri(api_url)
+      uri = URI(api_url.to_s)
+      unless %w[http https].include?(uri.scheme) && !Coercion.blank?(uri.host)
+        raise ArgumentError, "TokenBar API URL must be an absolute http:// or https:// URL"
+      end
+
+      uri
+    rescue URI::InvalidURIError => e
+      raise ArgumentError,
+            "TokenBar API URL must be an absolute http:// or https:// URL: #{e.message}"
     end
   end
 end

@@ -8,29 +8,13 @@ struct KeyDiscoveryView: View {
     @State private var includeShellProfiles = false
     @State private var includeHomeEnv = false
     @State private var selectedTargets: [DiscoveryTarget] = []
+    @State private var unreadableTargets: [DiscoveryTarget] = []
     @State private var hasScanned = false
     @State private var importingKeyIDs: Set<String> = []
     @State private var importMessages: [String: String] = [:]
 
     private var scanTargets: [DiscoveryTarget] {
-        let home = UserHomeDirectory.url
-        var targets: [DiscoveryTarget] = []
-
-        if includeShellProfiles {
-            targets.append(contentsOf: [
-                DiscoveryTarget(url: home.appendingPathComponent(".zshrc"), sourceLabel: "~/.zshrc"),
-                DiscoveryTarget(url: home.appendingPathComponent(".zprofile"), sourceLabel: "~/.zprofile"),
-                DiscoveryTarget(url: home.appendingPathComponent(".bashrc"), sourceLabel: "~/.bashrc"),
-                DiscoveryTarget(url: home.appendingPathComponent(".bash_profile"), sourceLabel: "~/.bash_profile")
-            ])
-        }
-
-        if includeHomeEnv {
-            targets.append(DiscoveryTarget(url: home.appendingPathComponent(".env"), sourceLabel: "~/.env"))
-        }
-
-        targets.append(contentsOf: selectedTargets)
-        return Array(Set(targets)).sorted { $0.sourceLabel < $1.sourceLabel }
+        Array(Set(selectedTargets)).sorted { $0.sourceLabel < $1.sourceLabel }
     }
 
     var body: some View {
@@ -47,7 +31,21 @@ struct KeyDiscoveryView: View {
             GroupBox {
                 VStack(alignment: .leading, spacing: 12) {
                     Toggle(appState.localized("scanShellProfiles"), isOn: $includeShellProfiles)
+                        .onChange(of: includeShellProfiles) { _, enabled in
+                            if enabled {
+                                authorizeShellProfiles()
+                            } else {
+                                selectedTargets.removeAll { Self.shellProfileNames.contains($0.url.lastPathComponent) }
+                            }
+                        }
                     Toggle(appState.localized("scanHomeEnv"), isOn: $includeHomeEnv)
+                        .onChange(of: includeHomeEnv) { _, enabled in
+                            if enabled {
+                                authorizeHomeEnv()
+                            } else {
+                                selectedTargets.removeAll { $0.sourceLabel == "~/.env" }
+                            }
+                        }
 
                     Divider()
 
@@ -114,6 +112,15 @@ struct KeyDiscoveryView: View {
                     .foregroundStyle(.secondary)
             }
 
+            if unreadableTargets.isEmpty == false {
+                Label(
+                    "\(appState.localized("failed")): \(unreadableTargets.map(\.sourceLabel).joined(separator: ", "))",
+                    systemImage: "exclamationmark.triangle"
+                )
+                .font(.caption)
+                .foregroundStyle(.orange)
+            }
+
             if hasScanned == false {
                 ContentUnavailableView(
                     appState.localized("chooseScanTargets"),
@@ -177,13 +184,52 @@ struct KeyDiscoveryView: View {
         let targets = scanTargets
 
         Task {
-            let results = await WorkspaceDiscovery().scan(targets: targets)
+            let result = await WorkspaceDiscovery().scan(targets: targets)
             await MainActor.run {
-                discovered = results
+                discovered = result.keys
+                unreadableTargets = result.unreadableTargets
                 isScanning = false
                 hasScanned = true
             }
         }
+    }
+
+    private static let shellProfileNames = [".zshrc", ".zprofile", ".bashrc", ".bash_profile"]
+
+    private func authorizeShellProfiles() {
+        let panel = NSOpenPanel()
+        panel.directoryURL = UserHomeDirectory.url
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.showsHiddenFiles = true
+        panel.message = appState.localized("addFilesPanelMessage")
+
+        guard panel.runModal() == .OK else {
+            includeShellProfiles = false
+            return
+        }
+        let targets = panel.urls
+            .filter { Self.shellProfileNames.contains($0.lastPathComponent) }
+            .map { DiscoveryTarget(url: $0, sourceLabel: "~/" + $0.lastPathComponent) }
+        appendTargets(targets)
+        includeShellProfiles = targets.isEmpty == false
+    }
+
+    private func authorizeHomeEnv() {
+        let panel = NSOpenPanel()
+        panel.directoryURL = UserHomeDirectory.url
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.showsHiddenFiles = true
+        panel.message = appState.localized("addFilesPanelMessage")
+
+        guard panel.runModal() == .OK, let url = panel.url, url.lastPathComponent == ".env" else {
+            includeHomeEnv = false
+            return
+        }
+        appendTargets([DiscoveryTarget(url: url, sourceLabel: "~/.env")])
     }
 
     private func addFiles() {
@@ -247,6 +293,8 @@ struct KeyDiscoveryView: View {
             return "ANTHROPIC_ADMIN_KEY"
         case "OpenRouter":
             return "OPENROUTER_API_KEY"
+        case "MiniMax":
+            return "MINIMAX_API_KEY"
         default:
             return nil
         }
@@ -288,6 +336,8 @@ struct KeyDiscoveryView: View {
             try await appState.storeAnthropicAdminKey(key.secretValue)
         case "OpenRouter":
             try await appState.storeOpenRouterAPIKey(key.secretValue)
+        case "MiniMax":
+            try await appState.storeMiniMaxAPIKey(key.secretValue)
         default:
             throw KeyDiscoveryImportError.unsupportedProvider
         }

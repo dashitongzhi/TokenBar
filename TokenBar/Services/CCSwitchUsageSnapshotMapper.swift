@@ -9,7 +9,12 @@ enum CCSwitchUsageSnapshotMapper {
         quotaWindows: [CCSwitchKnownProvider: [CCSwitchQuotaWindow]] = [:],
         now: Date = .now
     ) -> CCSwitchUsageSnapshot {
-        let recordsByCompositeID = Dictionary(uniqueKeysWithValues: providerRecords.map { ("\($0.appType):\($0.id)", $0) })
+        let recordsByCompositeID = Dictionary(
+            providerRecords.map { ("\($0.appType):\($0.id)", $0) },
+            uniquingKeysWith: { current, candidate in
+                candidate.name.localizedStandardCompare(current.name) == .orderedDescending ? candidate : current
+            }
+        )
         let recordsByID = Dictionary(grouping: providerRecords, by: \.id)
         let today = dayString(now)
         var aggregates: [CCSwitchKnownProvider: CCSwitchAggregate] = [:]
@@ -91,7 +96,7 @@ enum CCSwitchUsageSnapshotMapper {
             detail += " DeepSeek live balance: \(deepSeekBalance.currency) \(String(format: "%.2f", deepSeekBalance.totalBalance)); API available: \(deepSeekBalance.isAvailable ? "yes" : "no")."
         }
         let providerQuotaWindows = quotaWindows[aggregate.provider] ?? []
-        if let primaryWindow = primaryQuotaWindow(from: providerQuotaWindows) {
+        if let primaryWindow = QuotaWindowFormatting.primaryWindow(from: providerQuotaWindows) {
             detail += quotaDetail(primaryWindow: primaryWindow, windows: providerQuotaWindows)
         }
         if healthyRecords.contains(where: { $0.hasAPIKey }) {
@@ -159,12 +164,6 @@ enum CCSwitchUsageSnapshotMapper {
         formatter.timeZone = .current
         formatter.dateFormat = "yyyy-MM-dd"
         return formatter.string(from: date)
-    }
-
-    private static func primaryQuotaWindow(from windows: [CCSwitchQuotaWindow]) -> CCSwitchQuotaWindow? {
-        windows.first(where: { $0.modelName == "general" && ($0.hasKnownIntervalLimit || $0.hasKnownWeeklyLimit) })
-            ?? windows.first(where: { $0.hasKnownIntervalLimit || $0.hasKnownWeeklyLimit })
-            ?? windows.first
     }
 
     private static func healthAlerts(

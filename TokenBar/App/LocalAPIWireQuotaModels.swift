@@ -1,6 +1,5 @@
 import Foundation
 
-@MainActor
 extension LocalAPIWire {
     struct Quota: Encodable {
         var platform: String

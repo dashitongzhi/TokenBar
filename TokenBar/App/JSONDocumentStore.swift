@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 enum JSONDocumentLoadResult<Value> {
     case missing
@@ -48,6 +49,11 @@ struct JSONDocumentStore<Value: Codable> {
     ) {
         precondition(schemaVersion > 0, "JSON document schema version must be positive")
         let directory = directoryURL ?? {
+            if let override = ProcessInfo.processInfo.environment["TOKENBAR_STATE_DIR"]?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+               override.isEmpty == false {
+                return URL(fileURLWithPath: override, isDirectory: true)
+            }
             let support = fileManager.urls(
                 for: .applicationSupportDirectory,
                 in: .userDomainMask
@@ -110,6 +116,23 @@ struct JSONDocumentStore<Value: Codable> {
             }
         }
         try atomicWrite(data)
+    }
+
+    /// Persists production state without letting one malformed historical
+    /// document permanently disable every later save. The unreadable bytes
+    /// are retained in a sibling backup before the new envelope is written.
+    /// Non-recovery I/O failures remain visible in the unified log.
+    func saveRecovering(_ value: Value) {
+        do {
+            try save(value, allowRecovery: true)
+        } catch {
+            Logger(
+                subsystem: Bundle.main.bundleIdentifier ?? "TokenBar",
+                category: "persistence"
+            ).error(
+                "Failed to save \(url.lastPathComponent, privacy: .public): \(String(describing: error), privacy: .private)"
+            )
+        }
     }
 
     private func load(

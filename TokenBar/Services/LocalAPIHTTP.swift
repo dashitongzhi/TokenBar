@@ -1,6 +1,6 @@
 import Foundation
 
-struct LocalAPIRequest {
+nonisolated struct LocalAPIRequest: Sendable {
     var method: String
     var path: String
     var headers: [String: String]
@@ -9,16 +9,20 @@ struct LocalAPIRequest {
     var origin: String? {
         headers["origin"]
     }
+
+    var host: String? {
+        headers["host"]
+    }
 }
 
-enum LocalAPIRequestReadResult {
+nonisolated enum LocalAPIRequestReadResult: Sendable {
     case incomplete
     case complete(LocalAPIRequest)
     case malformed
     case tooLarge
 }
 
-struct LocalAPIResponse {
+nonisolated struct LocalAPIResponse: Sendable {
     var statusCode: Int
     var reason: String
     var body: Data
@@ -56,7 +60,7 @@ struct LocalAPIResponse {
     }
 }
 
-enum LocalAPIHTTPCodec {
+nonisolated enum LocalAPIHTTPCodec {
     private static let maximumHeaderBytes = 32 * 1024
     private static let maximumBodyBytes = 1_024 * 1_024
 
@@ -104,10 +108,10 @@ enum LocalAPIHTTPCodec {
         if let contentLength = headers["content-length"] {
             guard contentLength.isEmpty == false,
                   contentLength.allSatisfy({ $0.isNumber }),
-                  let parsedLength = Int(contentLength),
-                  parsedLength <= maximumBodyBytes else {
-                return .tooLarge
+                  let parsedLength = Int(contentLength) else {
+                return .malformed
             }
+            guard parsedLength <= maximumBodyBytes else { return .tooLarge }
             declaredBodyLength = parsedLength
         } else {
             declaredBodyLength = 0
@@ -159,5 +163,20 @@ enum LocalAPIHTTPCodec {
         }
         return (scheme == "http" || scheme == "https")
             && ["localhost", "127.0.0.1", "::1"].contains(host)
+    }
+
+    static func isAllowedHost(_ value: String?) -> Bool {
+        guard let value, value.isEmpty == false else {
+            // Synthetic in-process requests and HTTP/1.0 clients may omit Host.
+            // Browser and HTTP/1.1 traffic always supplies it and is validated.
+            return true
+        }
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if normalized.hasPrefix("[") {
+            guard let closingBracket = normalized.firstIndex(of: "]") else { return false }
+            return String(normalized[normalized.index(after: normalized.startIndex)..<closingBracket]) == "::1"
+        }
+        let host = normalized.split(separator: ":", maxSplits: 1).first.map(String.init) ?? ""
+        return host == "localhost" || host == "127.0.0.1"
     }
 }

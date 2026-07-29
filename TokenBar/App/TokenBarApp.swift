@@ -28,12 +28,11 @@ struct TokenBarApp: App {
                 exit(1)
             }
         }
-        #endif
-
         // Used by script/build_and_run.sh --verify to exercise LocalAPIServer without LaunchServices.
         if CommandLine.arguments.contains("--tokenbar-verify-local-api") {
             FileHandle.standardError.write(Data("TokenBar verify mode: starting local API\n".utf8))
             let state = AppState.shared
+            state.isPersistenceSuppressedForVerification = true
             let workspace = state.selectedWorkspace
             FileHandle.standardError.write(Data("""
             TokenBar verify mode: startup policy workspace=\(state.selectedWorkspaceID) model=\(state.selectedModel) estimated_cost=\(state.estimatedRunCost) estimated_tokens=\(Int(state.estimatedTokens)) session_budget=\(state.sessionBudget) workspace_daily_budget=\(workspace?.dailyBudget ?? 0) workspace_monthly_budget=\(workspace?.monthlyBudget ?? 0) per_run_cap=\(workspace?.maxEstimatedRunCost ?? 0)
@@ -44,6 +43,7 @@ struct TokenBarApp: App {
             LocalAPIServer.shared.syncWithPreference()
             RunLoop.main.run()
         }
+        #endif
     }
 
     var body: some Scene {

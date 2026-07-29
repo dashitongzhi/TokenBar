@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "shellwords"
+
 module TokenBarCLI
   module PolicyScaffolding
     def validate_init_options!(options)
@@ -17,70 +19,48 @@ module TokenBarCLI
     end
 
     def policy_yaml(options)
-      lines = [
-        "version: 1",
-        "",
-        "workspace:",
-        "  id: #{yaml_scalar(options[:workspace_id])}",
-        "  name: #{yaml_scalar(options[:workspace_name])}",
-        "  path: #{yaml_scalar(options[:workspace_path])}",
-        "  client: #{yaml_scalar(options[:client])}",
-        "",
-        "budgets:",
-        "  daily: #{money(options[:daily_budget])}",
-        "  monthly: #{money(options[:monthly_budget])}",
-        "  max_run: #{money(options[:max_run])}",
-        "  spend_today: #{money(options[:spend_today])}",
-        "  spend_month: #{money(options[:spend_month])}",
-        "",
-        "rules:",
-        "  max_estimated_tokens: #{options[:max_estimated_tokens]}",
-        "",
-        "providers:",
-        "  allowed:",
-        *options[:allowed_providers].map { |provider| "    - #{yaml_scalar(provider)}" },
-        "  preferred: #{yaml_scalar(options[:preferred_provider])}",
-        "  require_company_key: #{options[:require_company_key] ? "true" : "false"}",
-        "",
-        "models:"
-      ]
-      lines << "  default: #{yaml_scalar(options[:default_model])}"
-      if options[:blocked_models].empty?
-        lines << "  blocked: []"
-      else
-        lines << "  blocked:"
-        lines.concat(options[:blocked_models].map { |model| "    - #{yaml_scalar(model)}" })
-      end
+      document = {
+        "version" => 1,
+        "workspace" => {
+          "id" => options[:workspace_id].to_s,
+          "name" => options[:workspace_name].to_s,
+          "path" => options[:workspace_path].to_s,
+          "client" => options[:client].to_s
+        },
+        "budgets" => {
+          "daily" => money_value(options[:daily_budget]),
+          "monthly" => money_value(options[:monthly_budget]),
+          "max_run" => money_value(options[:max_run]),
+          "spend_today" => money_value(options[:spend_today]),
+          "spend_month" => money_value(options[:spend_month])
+        },
+        "rules" => {
+          "max_estimated_tokens" => options[:max_estimated_tokens].to_i
+        },
+        "providers" => {
+          "allowed" => options[:allowed_providers].map(&:to_s),
+          "preferred" => options[:preferred_provider].to_s,
+          "require_company_key" => options[:require_company_key] == true
+        },
+        "models" => {
+          "default" => options[:default_model].to_s,
+          "blocked" => options[:blocked_models].map(&:to_s)
+        }
+      }
       if options[:inference]
         inference = options[:inference]
-        lines.concat([
-          "",
-          "setup:",
-          "  source: #{yaml_scalar(inference[:source])}",
-          "  configured_models: #{inference[:configured_models].to_i}",
-          "  inferred_from:"
-        ])
         paths = Array(inference[:paths])
-        if paths.empty?
-          lines << "    - #{yaml_scalar(options[:workspace_path])}"
-        else
-          lines.concat(paths.map { |path| "    - #{yaml_scalar(path)}" })
-        end
+        document["setup"] = {
+          "source" => inference[:source].to_s,
+          "configured_models" => inference[:configured_models].to_i,
+          "inferred_from" => (paths.empty? ? [options[:workspace_path]] : paths).map(&:to_s)
+        }
       end
-      lines << ""
-      lines.join("\n")
+      YAML.dump(document)
     end
 
-    def yaml_scalar(value)
-      string = value.to_s
-      return "\"\"" if string.empty?
-      return string if string.match?(/\A[a-zA-Z0-9_.\/~:-]+\z/) && !%w[true false null yes no on off].include?(string.downcase)
-
-      string.inspect
-    end
-
-    def money(value)
-      format("%.2f", value)
+    def money_value(value)
+      format("%.2f", value).to_f
     end
 
     def hook_file(hook, cwd, root)
@@ -95,7 +75,7 @@ module TokenBarCLI
                   "hooks" => [
                     {
                       "type" => "command",
-                      "command" => "TOKENBAR_BIN=#{root.join("bin/tokenbar").to_s.inspect} #{root.join("examples/hooks/codex-tokenbar-user-prompt-submit.sh").to_s.inspect}",
+                      "command" => "TOKENBAR_BIN=#{Shellwords.escape(root.join("bin/tokenbar").to_s)} #{Shellwords.escape(root.join("examples/hooks/codex-tokenbar-user-prompt-submit.sh").to_s)}",
                       "timeout" => 10,
                       "statusMessage" => "Checking TokenBar policy"
                     }
@@ -107,7 +87,7 @@ module TokenBarCLI
                   "hooks" => [
                     {
                       "type" => "command",
-                      "command" => "TOKENBAR_BIN=#{root.join("bin/tokenbar").to_s.inspect} #{root.join("examples/hooks/codex-tokenbar-stop.sh").to_s.inspect}",
+                      "command" => "TOKENBAR_BIN=#{Shellwords.escape(root.join("bin/tokenbar").to_s)} #{Shellwords.escape(root.join("examples/hooks/codex-tokenbar-stop.sh").to_s)}",
                       "timeout" => 10,
                       "statusMessage" => "Sending Codex usage to TokenBar"
                     }
@@ -123,7 +103,7 @@ module TokenBarCLI
           JSON.pretty_generate(
             "statusLine" => {
               "type" => "command",
-              "command" => "TOKENBAR_BIN=#{root.join("bin/tokenbar").to_s.inspect} #{root.join("examples/hooks/claude-tokenbar-statusline.sh").to_s.inspect}",
+              "command" => "TOKENBAR_BIN=#{Shellwords.escape(root.join("bin/tokenbar").to_s)} #{Shellwords.escape(root.join("examples/hooks/claude-tokenbar-statusline.sh").to_s)}",
               "padding" => 0
             },
             "hooks" => {
@@ -132,7 +112,7 @@ module TokenBarCLI
                   "hooks" => [
                     {
                       "type" => "command",
-                      "command" => "TOKENBAR_BIN=#{root.join("bin/tokenbar").to_s.inspect} #{root.join("examples/hooks/claude-tokenbar-user-prompt-submit.sh").to_s.inspect}",
+                      "command" => "TOKENBAR_BIN=#{Shellwords.escape(root.join("bin/tokenbar").to_s)} #{Shellwords.escape(root.join("examples/hooks/claude-tokenbar-user-prompt-submit.sh").to_s)}",
                       "timeout" => 10
                     }
                   ]

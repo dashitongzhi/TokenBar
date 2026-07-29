@@ -47,6 +47,7 @@ struct AnthropicUsageTransport {
         }
 
         var request = URLRequest(url: url)
+        request.timeoutInterval = 15
         request.httpMethod = "GET"
         request.setValue(adminKey, forHTTPHeaderField: "x-api-key")
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")

@@ -32,23 +32,9 @@ struct CCSwitchProviderUsageSnapshot: Equatable {
     var fetchedAt: Date
 }
 
-struct CCSwitchQuotaWindow: Equatable {
-    var providerID: String
-    var providerDisplayName: String
-    var modelName: String
-    var intervalUsedCount: Double
-    var intervalTotalCount: Double
-    var intervalUsedPercent: Double
-    var intervalRemainingPercent: Double?
-    var intervalStartAt: Date
-    var intervalResetAt: Date
-    var weeklyUsedCount: Double
-    var weeklyTotalCount: Double
-    var weeklyUsedPercent: Double
-    var weeklyRemainingPercent: Double?
-    var weeklyStartAt: Date
-    var weeklyResetAt: Date
+typealias CCSwitchQuotaWindow = MiniMaxQuotaWindow
 
+extension MiniMaxQuotaWindow {
     var hasKnownIntervalLimit: Bool {
         intervalTotalCount > 0 || intervalRemainingPercent != nil
     }
@@ -58,25 +44,11 @@ struct CCSwitchQuotaWindow: Equatable {
     }
 
     var intervalWindowLabel: String {
-        Self.windowLabel(from: intervalStartAt, to: intervalResetAt)
+        QuotaWindowFormatting.label(from: intervalStartAt, to: intervalResetAt)
     }
 
     var weeklyWindowLabel: String {
-        Self.windowLabel(from: weeklyStartAt, to: weeklyResetAt)
-    }
-
-    private static func windowLabel(from start: Date, to end: Date) -> String {
-        let seconds = max(end.timeIntervalSince(start), 0)
-        if seconds >= 86_400 {
-            let days = max(Int(round(seconds / 86_400)), 1)
-            return days == 1 ? "1-day window" : "\(days)-day window"
-        }
-        if seconds >= 3_600 {
-            let hours = max(Int(round(seconds / 3_600)), 1)
-            return hours == 1 ? "1-hour window" : "\(hours)-hour window"
-        }
-        let minutes = max(Int(round(seconds / 60)), 1)
-        return minutes == 1 ? "1-minute window" : "\(minutes)-minute window"
+        QuotaWindowFormatting.label(from: weeklyStartAt, to: weeklyResetAt)
     }
 }
 
@@ -95,21 +67,20 @@ struct CCSwitchUsageService {
         providerTransport = CCSwitchProviderTransport()
     }
 
-    func refresh() async -> CCSwitchUsageRefreshResult {
+    func refresh(includeOfficialQuotaProbes: Bool = false) async -> CCSwitchUsageRefreshResult {
         guard fileManager.fileExists(atPath: databaseURL.path) else {
             return .unavailable("CC Switch usage requires ~/.cc-switch/cc-switch.db.")
         }
 
-        let snapshotURL = fileManager.temporaryDirectory
-            .appendingPathComponent("tokenbar-cc-switch-\(UUID().uuidString).db")
         do {
-            try fileManager.copyItem(at: databaseURL, to: snapshotURL)
-            defer { try? fileManager.removeItem(at: snapshotURL) }
-
-            let database = try CCSwitchDatabaseAdapter(path: snapshotURL.path)
+            let database = try CCSwitchDatabaseAdapter(path: databaseURL.path)
             let databaseSnapshot = try database.load(since: CCSwitchUsageSnapshotMapper.rollingStartString())
-            async let deepSeekBalance = providerTransport.deepSeekBalance(from: databaseSnapshot.providerRecords)
-            async let quotaWindows = providerTransport.liveQuotaWindows(from: databaseSnapshot.providerRecords)
+            async let deepSeekBalance: DeepSeekBalance? = includeOfficialQuotaProbes
+                ? providerTransport.deepSeekBalance(from: databaseSnapshot.providerRecords)
+                : nil
+            async let quotaWindows: [CCSwitchKnownProvider: [CCSwitchQuotaWindow]] = includeOfficialQuotaProbes
+                ? providerTransport.liveQuotaWindows(from: databaseSnapshot.providerRecords)
+                : [:]
             let snapshot = CCSwitchUsageSnapshotMapper.buildSnapshot(
                 providerRecords: databaseSnapshot.providerRecords,
                 rollups: databaseSnapshot.dailyRollups,
@@ -127,13 +98,8 @@ struct CCSwitchUsageService {
 
     func configuredModelCatalogItems(now: Date = .now) -> [ModelCatalogItem] {
         guard fileManager.fileExists(atPath: databaseURL.path) else { return [] }
-        let snapshotURL = fileManager.temporaryDirectory
-            .appendingPathComponent("tokenbar-cc-switch-models-\(UUID().uuidString).db")
         do {
-            try fileManager.copyItem(at: databaseURL, to: snapshotURL)
-            defer { try? fileManager.removeItem(at: snapshotURL) }
-
-            let database = try CCSwitchDatabaseAdapter(path: snapshotURL.path)
+            let database = try CCSwitchDatabaseAdapter(path: databaseURL.path)
             let records = try database.providerRecords()
             return records.flatMap { record -> [ModelCatalogItem] in
                 let providerID = CCSwitchProviderNormalizer.normalize(record: record)?.providerID ?? record.id

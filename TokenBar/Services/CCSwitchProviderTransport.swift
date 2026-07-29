@@ -2,16 +2,20 @@ import Foundation
 
 struct CCSwitchProviderTransport {
     private let session: URLSession
+    private let miniMaxClient: MiniMaxQuotaClient
 
     init(session: URLSession = .shared) {
         self.session = session
+        miniMaxClient = MiniMaxQuotaClient(session: session)
     }
 
     func deepSeekBalance(from providers: [CCSwitchProviderRecord]) async -> DeepSeekBalance? {
         guard let apiKey = providers
             .compactMap({ record -> String? in
-                guard CCSwitchProviderNormalizer.normalize(record: record) == .deepSeek else { return nil }
-                return record.apiKey
+                guard CCSwitchProviderNormalizer.normalize(record: record) == .deepSeek,
+                      Self.hasOfficialBaseURL(record, allowedHosts: ["api.deepseek.com"]) else { return nil }
+                return record.apiKey(forProviderID: CCSwitchKnownProvider.deepSeek.providerID)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
             })
             .first(where: { $0.isEmpty == false }),
             let url = URL(string: "https://api.deepseek.com/user/balance")
@@ -20,6 +24,7 @@ struct CCSwitchProviderTransport {
         }
 
         var request = URLRequest(url: url)
+        request.timeoutInterval = 15
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         do {
@@ -47,7 +52,9 @@ struct CCSwitchProviderTransport {
 
         for record in providers {
             guard CCSwitchProviderNormalizer.normalize(record: record) == .miniMax,
-                  let apiKey = record.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  Self.hasOfficialBaseURL(record, allowedHosts: ["api.minimaxi.com", "api.minimax.io"]),
+                  let apiKey = record.apiKey(forProviderID: CCSwitchKnownProvider.miniMax.providerID)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
                   apiKey.isEmpty == false,
                   seenKeys.insert(apiKey).inserted
             else {
@@ -64,46 +71,15 @@ struct CCSwitchProviderTransport {
     }
 
     private func miniMaxQuotaWindows(apiKey: String, record: CCSwitchProviderRecord) async -> [CCSwitchQuotaWindow]? {
-        guard let url = URL(string: "https://api.minimaxi.com/v1/token_plan/remains") else { return nil }
-
-        var request = URLRequest(url: url)
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        request.setValue(apiKey, forHTTPHeaderField: "X-Api-Key")
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue("TokenBar", forHTTPHeaderField: "User-Agent")
-
         do {
-            let (data, response) = try await session.data(for: request)
-            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-                return nil
-            }
-            let decoded = try JSONDecoder().decode(CCSwitchMiniMaxQuotaResponse.self, from: data)
+            let decoded = try await miniMaxClient.fetch(apiKey: apiKey)
             guard decoded.baseResp?.statusCode ?? 0 == 0 else { return nil }
-            return decoded.modelRemains.map { item in
-                CCSwitchQuotaWindow(
+            return decoded.modelRemains.map {
+                $0.quotaWindow(
                     providerID: CCSwitchKnownProvider.miniMax.providerID,
-                    providerDisplayName: record.name.isEmpty ? CCSwitchKnownProvider.miniMax.displayName : record.name,
-                    modelName: item.modelName,
-                    intervalUsedCount: item.currentIntervalUsageCount,
-                    intervalTotalCount: item.currentIntervalTotalCount,
-                    intervalUsedPercent: Self.usedPercent(
-                        used: item.currentIntervalUsageCount,
-                        total: item.currentIntervalTotalCount,
-                        remainingPercent: item.currentIntervalRemainingPercent
-                    ),
-                    intervalRemainingPercent: item.currentIntervalRemainingPercent,
-                    intervalStartAt: Self.date(milliseconds: item.startTime),
-                    intervalResetAt: Self.date(milliseconds: item.endTime),
-                    weeklyUsedCount: item.currentWeeklyUsageCount,
-                    weeklyTotalCount: item.currentWeeklyTotalCount,
-                    weeklyUsedPercent: Self.usedPercent(
-                        used: item.currentWeeklyUsageCount,
-                        total: item.currentWeeklyTotalCount,
-                        remainingPercent: item.currentWeeklyRemainingPercent
-                    ),
-                    weeklyRemainingPercent: item.currentWeeklyRemainingPercent,
-                    weeklyStartAt: Self.date(milliseconds: item.weeklyStartTime),
-                    weeklyResetAt: Self.date(milliseconds: item.weeklyEndTime)
+                    providerDisplayName: record.name.isEmpty
+                        ? CCSwitchKnownProvider.miniMax.displayName
+                        : record.name
                 )
             }
         } catch {
@@ -111,17 +87,15 @@ struct CCSwitchProviderTransport {
         }
     }
 
-    private static func usedPercent(used: Double, total: Double, remainingPercent: Double?) -> Double {
-        if total > 0 {
-            return min(max((used / total) * 100, 0), 100)
+    private static func hasOfficialBaseURL(_ record: CCSwitchProviderRecord, allowedHosts: Set<String>) -> Bool {
+        guard let rawURL = record.baseURL?.trimmingCharacters(in: .whitespacesAndNewlines),
+              let components = URLComponents(string: rawURL),
+              components.scheme?.lowercased() == "https",
+              let host = components.host?.lowercased(),
+              components.user == nil,
+              components.password == nil else {
+            return false
         }
-        if let remainingPercent {
-            return min(max(100 - remainingPercent, 0), 100)
-        }
-        return 0
-    }
-
-    private static func date(milliseconds: Double) -> Date {
-        Date(timeIntervalSince1970: milliseconds / 1000)
+        return allowedHosts.contains(host)
     }
 }

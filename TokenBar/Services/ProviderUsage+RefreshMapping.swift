@@ -91,12 +91,12 @@ extension ProviderUsage {
         sourceUpdatedAt = snapshot.fetchedAt
         healthAlerts = nil
 
-        let primaryLabel = Self.quotaWindowLabel(seconds: snapshot.primaryWindowSeconds, fallback: "5-hour window")
-        var detail = "Codex login quota from local ~/.codex/auth.json and ChatGPT wham usage. \(primaryLabel) is \(Int(snapshot.primaryUsedPercent))% used."
+        let primaryLabel = QuotaWindowFormatting.label(seconds: snapshot.primaryWindowSeconds, fallback: "5-hour window")
+        var detail = "Best-effort Codex login quota from local ~/.codex/auth.json and an unofficial ChatGPT usage endpoint. \(primaryLabel) is \(Int(snapshot.primaryUsedPercent))% used."
         if let secondaryUsedPercent = snapshot.secondaryUsedPercent, let secondaryResetAt = snapshot.secondaryResetAt {
             let formatter = RelativeDateTimeFormatter()
             formatter.unitsStyle = .short
-            let secondaryLabel = Self.quotaWindowLabel(seconds: snapshot.secondaryWindowSeconds, fallback: "7-day window")
+            let secondaryLabel = QuotaWindowFormatting.label(seconds: snapshot.secondaryWindowSeconds, fallback: "7-day window")
             detail += " \(secondaryLabel) is \(Int(secondaryUsedPercent))% used and resets \(formatter.localizedString(for: secondaryResetAt, relativeTo: snapshot.fetchedAt))."
         }
         if let planType = snapshot.planType, planType.isEmpty == false {
@@ -109,7 +109,7 @@ extension ProviderUsage {
     }
 
     mutating func apply(snapshot: CCSwitchProviderUsageSnapshot) {
-        if let quotaWindow = Self.primaryQuotaWindow(from: snapshot.quotaWindows),
+        if let quotaWindow = QuotaWindowFormatting.primaryWindow(from: snapshot.quotaWindows),
            quotaWindow.hasKnownIntervalLimit || quotaWindow.hasKnownWeeklyLimit {
             current = quotaWindow.intervalUsedPercent
             limit = 100
@@ -189,23 +189,4 @@ extension ProviderUsage {
         sourceDetail = detail
     }
 
-    private static func primaryQuotaWindow(from windows: [CCSwitchQuotaWindow]) -> CCSwitchQuotaWindow? {
-        windows.first(where: { $0.modelName == "general" && ($0.hasKnownIntervalLimit || $0.hasKnownWeeklyLimit) })
-            ?? windows.first(where: { $0.hasKnownIntervalLimit || $0.hasKnownWeeklyLimit })
-            ?? windows.first
-    }
-
-    private static func quotaWindowLabel(seconds: TimeInterval?, fallback: String) -> String {
-        guard let seconds, seconds > 0 else { return fallback }
-        if seconds >= 86_400 {
-            let days = max(Int(round(seconds / 86_400)), 1)
-            return days == 1 ? "1-day window" : "\(days)-day window"
-        }
-        if seconds >= 3_600 {
-            let hours = max(Int(round(seconds / 3_600)), 1)
-            return hours == 1 ? "1-hour window" : "\(hours)-hour window"
-        }
-        let minutes = max(Int(round(seconds / 60)), 1)
-        return minutes == 1 ? "1-minute window" : "\(minutes)-minute window"
-    }
 }

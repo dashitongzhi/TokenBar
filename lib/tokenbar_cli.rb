@@ -8,7 +8,10 @@ require "optparse"
 require "pathname"
 require "time"
 require "yaml"
+require_relative "tokenbar_cli/coercion"
+require_relative "tokenbar_cli/provider_catalog"
 require_relative "tokenbar_cli/local_api_client"
+require_relative "tokenbar_cli/api_session"
 require_relative "tokenbar_cli/offline_policy"
 require_relative "tokenbar_cli/agent_usage"
 require_relative "tokenbar_cli/presentation"
@@ -52,22 +55,57 @@ module TokenBarCLI
 
   class Error < StandardError; end
 
-  extend Presentation
-  extend ConfigDiscovery
-  extend PolicyScaffolding
-  extend PolicyConfiguration
-  extend CommandSupport
-  extend Commands::StatusCheck
-  extend Commands::Policy
-  extend Commands::Usage
-  extend Commands::Routing
+  class CommandContext
+    include AgentUsage::PayloadHelpers
+    include AgentUsage::ClaudeStatusline
+    include AgentUsage::CodexUsage
+    include Presentation
+    include ConfigDiscovery
+    include PolicyScaffolding
+    include PolicyConfiguration
+    include CommandSupport
+    include Commands::StatusCheck
+    include Commands::Policy
+    include Commands::Usage
+    include Commands::Routing
 
-  def self.main(argv)
+    def initialize(api_session_factory: nil)
+      @api_session_factory = api_session_factory || lambda { |api_url|
+        ApiSession.new(api_url, token_paths: LOCAL_API_TOKEN_PATHS)
+      }
+      @api_sessions = {}
+    end
+
+    def dispatch(command, options, argv)
+      case command
+      when "status"
+        status(options, argv)
+      when "check"
+        check(options, argv)
+      when "policy"
+        policy(options, argv)
+      when "usage"
+        usage(options, argv)
+      when "routing"
+        routing(options, argv)
+      else
+        raise Error, "unknown command: #{command}"
+      end
+    end
+
+    def api_session(api_url)
+      @api_sessions[api_url] ||= @api_session_factory.call(api_url)
+    end
+  end
+
+  def self.main(argv, context: CommandContext.new)
     options = {
       api_url: ENV.fetch("TOKENBAR_API_URL", DEFAULT_API_URL),
       config_path: nil,
       json: false
     }
+
+    extract_global_options!(argv, options)
 
     global = OptionParser.new do |opts|
       opts.banner = "Usage: tokenbar [--api-url URL] [--config PATH] <status|check|policy|usage|routing> [options]"
@@ -84,26 +122,61 @@ module TokenBarCLI
     command = argv.shift
     raise Error, "missing command: use status, check, policy, usage, or routing" unless command
 
-    case command
-    when "status"
-      status(options, argv)
-    when "check"
-      check(options, argv)
-    when "policy"
-      policy(options, argv)
-    when "usage"
-      usage(options, argv)
-    when "routing"
-      routing(options, argv)
-    else
-      raise Error, "unknown command: #{command}"
-    end
+    context.dispatch(command, options, argv)
   rescue Error => e
     warn "tokenbar: #{e.message}"
     exit 3
   rescue OptionParser::ParseError => e
     warn "tokenbar: #{e.message}"
     exit 3
+  rescue StandardError => e
+    warn "tokenbar: internal error: #{e.class}: #{e.message}"
+    exit 3
+  end
+
+  def self.extract_global_options!(argv, options)
+    index = 0
+    while index < argv.length
+      argument = argv[index]
+      case argument
+      when "--api-url", "--config"
+        value = argv[index + 1]
+        raise OptionParser::MissingArgument, argument if value.nil?
+
+        options[argument == "--api-url" ? :api_url : :config_path] = value
+        argv.slice!(index, 2)
+      when /\A--api-url=(.*)\z/
+        options[:api_url] = Regexp.last_match(1)
+        argv.delete_at(index)
+      when /\A--config=(.*)\z/
+        options[:config_path] = Regexp.last_match(1)
+        argv.delete_at(index)
+      else
+        index += 1
+      end
+    end
+  end
+
+  class << self
+    def default_model(provider)
+      CommandContext.new.default_model(provider)
+    end
+
+    def compact_hash(value)
+      CommandContext.new.compact_hash(value)
+    end
+
+    def hook_file(hook, cwd, root)
+      CommandContext.new.hook_file(hook, cwd, root)
+    end
+
+    def offline_policy_response(input, config)
+      CommandContext.new.offline_policy_response(input, config)
+    end
+
+    def offline_workspace(config, workspace_id)
+      CommandContext.new.offline_workspace(config, workspace_id)
+    end
   end
 end
 

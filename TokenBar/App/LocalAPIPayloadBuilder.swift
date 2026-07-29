@@ -1,6 +1,5 @@
 import Foundation
 
-@MainActor
 enum LocalAPIPayloadBuilder {
     static func policyJSON(currentDecision: PolicyDecision, workspacePolicies: [WorkspacePolicy]) throws -> Data {
         try encode(LocalAPIWire.PolicyDocument(
@@ -55,7 +54,7 @@ enum LocalAPIPayloadBuilder {
     }
 
     private static func timestamp(_ date: Date = .now) -> String {
-        ISO8601DateFormatter().string(from: date)
+        date.ISO8601Format()
     }
 
     private static func encode<Value: Encodable>(_ value: Value) throws -> Data {

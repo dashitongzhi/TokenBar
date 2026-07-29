@@ -86,6 +86,13 @@ private struct GeneralSettingsView: View {
                 Text(appState.localized("localFirst"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                Toggle(
+                    appState.localized("ccSwitchLiveQuotaProbes"),
+                    isOn: $appState.ccSwitchLiveQuotaProbesEnabled
+                )
+                Text(appState.localized("ccSwitchLiveQuotaProbesCaption"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)

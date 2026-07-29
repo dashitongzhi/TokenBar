@@ -4,13 +4,15 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT_DIR/script/package_release.sh"
 
-TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/tokenbar-release-guard.XXXXXX")"
+TEST_ROOT="$ROOT_DIR/.build/tokenbar-release-guard"
+mkdir -p "$TEST_ROOT"
 RELEASE_ROOT_INPUT="$TEST_ROOT/release"
 ARCHIVE_PATH_INPUT=""
 prepare_release_paths
 
 inside_file="$RELEASE_ROOT/removable"
 outside_file="$TEST_ROOT/outside"
+trap 'rm -f "$outside_file"' EXIT
 printf 'inside\n' > "$inside_file"
 printf 'outside\n' > "$outside_file"
 

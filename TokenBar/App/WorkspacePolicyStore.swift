@@ -59,7 +59,7 @@ struct WorkspacePolicyStore {
     }
 
     func save(_ policies: [WorkspacePolicy]) {
-        try? document.save(policies)
+        document.saveRecovering(policies)
     }
 
     private static let demoSeedIDs: Set<String> = ["client-app", "personal-lab", "production-fix"]

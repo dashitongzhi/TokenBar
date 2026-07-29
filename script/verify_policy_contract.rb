@@ -102,7 +102,7 @@ Tempfile.create(["tokenbar-policy-contract", ".yml"]) do |policy_file|
     "--workspace-id",
     "policy-contract-cli",
     "--workspace-name",
-    "Policy Contract CLI",
+    "Policy \#{Contract CLI",
     "--daily-budget",
     "0",
     "--monthly-budget",
@@ -130,6 +130,10 @@ Tempfile.create(["tokenbar-policy-contract", ".yml"]) do |policy_file|
     warn "policy init zero-cap smoke wrote unexpected max_run: #{generated.dig("budgets", "max_run").inspect}"
     exit 1
   end
+  unless generated.dig("workspace", "name") == "Policy \#{Contract CLI"
+    warn "policy init emitted invalid or changed YAML scalar content"
+    exit 1
+  end
 
 
   managed_stdout, managed_stderr, managed_status = run_cli_check(policy_file.path, "company")
@@ -145,6 +149,19 @@ Tempfile.create(["tokenbar-policy-contract", ".yml"]) do |policy_file|
     warn "personal-key CLI smoke failed: #{personal_stderr.empty? ? personal_stdout : personal_stderr}"
     exit 1
   end
+end
+
+config_without_run_cap = deep_merge(defaults.fetch("config"), "budgets" => {
+  "daily" => 0,
+  "monthly" => 0,
+  "spend_today" => 0,
+  "spend_month" => 0
+})
+workspace_without_run_cap = TokenBarCLI.offline_workspace(config_without_run_cap, "policy-contract")
+unless workspace_without_run_cap["maxEstimatedRunCost"] == 0 &&
+       JSON.generate(workspace_without_run_cap).include?("Infinity") == false
+  warn "missing max_run must use the finite zero-cap sentinel"
+  exit 1
 end
 
 puts "Verified #{verified_cases} shared policy contract decisions, zero-cap policy init, and offline CLI exit codes."

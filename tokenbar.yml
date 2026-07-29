@@ -3,7 +3,7 @@ version: 1
 workspace:
   id: tokenbar
   name: TokenBar
-  path: /Users/kral/project/TokenBar
+  path: .
   client: local
 
 budgets:
@@ -29,10 +29,8 @@ models:
 
 setup:
   source: local_agent_config
-  configured_models: 13
-  inferred_from:
-    - /Users/kral/.codex/config.toml
-    - /Users/kral/.cc-switch/cc-switch.db
+  configured_models: 0
+  inferred_from: []
 
 rules:
   - name: Block expensive refactors on TokenBar

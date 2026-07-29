@@ -4,221 +4,6 @@ private struct VerificationFailure: Error, CustomStringConvertible {
     let description: String
 }
 
-enum AgentProvider: String, Codable {
-    case claudeCode
-    case codex
-}
-
-enum ModelUsageSource: String, Codable {
-    case localAgent
-    case configured
-}
-
-struct WorkspacePolicy: Identifiable, Codable, Equatable {
-    var id: String
-    var name: String
-    var pathHint: String
-    var client: String
-    var dailyBudget: Double
-    var monthlyBudget: Double
-    var spendToday: Double
-    var spendMonth: Double
-    var spendDayKey: String?
-    var spendMonthKey: String?
-    var allowedProviderIDs: [String]
-    var blockedModels: [String]
-    var maxEstimatedRunCost: Double
-    var maxEstimatedTokens: Int
-    var requireCompanyKey: Bool
-    var preferredProviderID: String?
-    var preferredModel: String?
-    var setupSourceDetail: String?
-    var configuredModelCount: Int?
-    var inferredFromPaths: [String]?
-
-    @discardableResult
-    mutating func resetExpiredSpendBuckets(
-        now: Date = .now,
-        calendar: Calendar = .current
-    ) -> Bool {
-        let components = calendar.dateComponents([.year, .month, .day], from: now)
-        guard let year = components.year,
-              let month = components.month,
-              let day = components.day else {
-            return false
-        }
-        let currentDayKey = String(format: "%04d-%02d-%02d", year, month, day)
-        let currentMonthKey = String(format: "%04d-%02d", year, month)
-        var changed = false
-        if spendDayKey == nil {
-            spendDayKey = currentDayKey
-            changed = true
-        } else if spendDayKey != currentDayKey {
-            spendToday = 0
-            spendDayKey = currentDayKey
-            changed = true
-        }
-        if spendMonthKey == nil {
-            spendMonthKey = currentMonthKey
-            changed = true
-        } else if spendMonthKey != currentMonthKey {
-            spendMonth = 0
-            spendMonthKey = currentMonthKey
-            changed = true
-        }
-        return changed
-    }
-}
-
-struct LocalAgentUsageAppliedSnapshot: Equatable {
-    var agent: AgentProvider
-    var providerID: String
-    var model: String
-    var costDelta: Double
-    var tokenDelta: Double
-    var requestDelta: Int
-    var occurredAt: Date
-}
-
-struct ModelUsageRollup: Identifiable, Codable, Equatable {
-    var agent: AgentProvider
-    var providerID: String
-    var model: String
-    var source: ModelUsageSource
-    var configPath: String?
-    var spendToday: Double
-    var spendMonth: Double
-    var tokensToday: Double
-    var tokensMonth: Double
-    var requestCountToday: Int
-    var requestCountMonth: Int
-    var dayKey: String
-    var monthKey: String
-    var lastUpdated: Date
-
-    var id: String {
-        [agent.rawValue, providerID, model.lowercased(), source.rawValue, configPath ?? ""]
-            .joined(separator: "|")
-    }
-}
-
-enum SmartRoutingRunSignal: String, Codable {
-    case success
-    case followUp
-    case failed
-    case unknown
-}
-
-struct SmartRoutingRunInput: Codable, Equatable {
-    var agent: AgentProvider?
-    var taskIntent: String?
-    var providerID: String?
-    var model: String?
-    var workspaceID: String?
-    var workspaceName: String?
-    var workspacePath: String?
-    var sessionID: String?
-    var taskID: String?
-    var estimatedCost: Double?
-    var actualCost: Double?
-    var estimatedTokens: Int?
-    var actualTokens: Int?
-    var inputTokens: Int?
-    var outputTokens: Int?
-    var requestCount: Int?
-    var signal: SmartRoutingRunSignal?
-    var followUpRequired: Bool?
-    var selectedBy: String?
-    var alternatives: [String]?
-    var routingReason: String?
-    var metadata: [String: String]?
-    var occurredAt: Date?
-}
-
-struct SmartRoutingRunRecord: Identifiable, Codable, Equatable {
-    var id: UUID
-    var recordedAt: Date
-    var occurredAt: Date
-    var agent: AgentProvider
-    var taskIntent: String
-    var providerID: String
-    var model: String
-    var workspaceID: String?
-    var workspaceName: String?
-    var workspacePath: String?
-    var sessionID: String?
-    var taskID: String?
-    var estimatedCost: Double
-    var actualCost: Double
-    var estimatedCostKnown: Bool?
-    var actualCostKnown: Bool?
-    var estimatedTokens: Int
-    var actualTokens: Int
-    var estimatedTokensKnown: Bool?
-    var actualTokensKnown: Bool?
-    var inputTokens: Int?
-    var outputTokens: Int?
-    var requestCount: Int?
-    var signal: SmartRoutingRunSignal
-    var followUpRequired: Bool
-    var selectedBy: String?
-    var alternatives: [String]
-    var routingReason: String?
-    var metadata: [String: String]
-
-    var isWin: Bool {
-        signal == .success && followUpRequired == false
-    }
-}
-
-struct SmartRoutingRouteStats: Identifiable, Codable, Equatable {
-    var id: String { routeKey }
-    var routeKey: String
-    var providerID: String
-    var model: String
-    var taskIntent: String
-    var runCount: Int
-    var winCount: Int
-    var followUpCount: Int
-    var failedCount: Int
-    var unknownCount: Int
-    var winRate: Double
-    var followUpRate: Double
-    var estimatedCostTotal: Double
-    var actualCostTotal: Double
-    var estimatedCostKnownRunCount: Int
-    var actualCostKnownRunCount: Int
-    var estimatedTokensTotal: Int
-    var actualTokensTotal: Int
-    var estimatedTokensKnownRunCount: Int
-    var actualTokensKnownRunCount: Int
-    var averageCostDelta: Double
-    var averageTokenDelta: Double
-    var lastRunAt: Date
-}
-
-struct SmartRoutingStatsSnapshot: Codable, Equatable {
-    var generatedAt: Date
-    var totalRuns: Int
-    var winCount: Int
-    var followUpCount: Int
-    var failedCount: Int
-    var unknownCount: Int
-    var winRate: Double
-    var followUpRate: Double
-    var estimatedCostTotal: Double
-    var actualCostTotal: Double
-    var estimatedCostKnownRunCount: Int
-    var actualCostKnownRunCount: Int
-    var estimatedTokensTotal: Int
-    var actualTokensTotal: Int
-    var estimatedTokensKnownRunCount: Int
-    var actualTokensKnownRunCount: Int
-    var excludedNonProductionRuns: Int
-    var routeStats: [SmartRoutingRouteStats]
-    var recentRuns: [SmartRoutingRunRecord]
-}
-
 @main
 struct VerifyPersistenceStores {
     @MainActor
@@ -412,10 +197,18 @@ struct VerifyPersistenceStores {
             agent: .codex,
             providerID: "openai",
             model: model,
+            workspaceID: "workspace",
+            sessionKey: "persistence-verifier",
+            sourceName: "persistence_verifier",
             costDelta: cost,
             tokenDelta: tokens,
             requestDelta: requests,
-            occurredAt: date
+            contextTokenTotal: tokens,
+            contextWindowSize: nil,
+            rateLimitUsedPercentage: nil,
+            rateLimitResetAt: nil,
+            occurredAt: date,
+            sourceDetail: "persistence verifier fixture"
         )
     }
 

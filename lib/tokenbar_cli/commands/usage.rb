@@ -68,8 +68,9 @@ module TokenBarCLI
         input["totalTokens"] ||= input["inputTokens"].to_i + input["outputTokens"].to_i
         validate_usage_input!(input)
 
-        response = post_local_usage_ingest(options[:api_url], input)
-        raise Error, api_failure_message("local usage ingestion requires the app API") unless response
+        result = post_local_usage_ingest(options[:api_url], input)
+        response = result.body
+        raise Error, result.failure_message("local usage ingestion requires the app API") unless response
 
         if output_json
           puts JSON.pretty_generate(response)
@@ -90,8 +91,7 @@ module TokenBarCLI
         end
         parser.parse!(argv)
 
-        raw = STDIN.read
-        payload = JSON.parse(raw)
+        payload = read_required_stdin_json("Claude Code statusline JSON")
         input = claude_statusline_usage_input(payload)
         config = load_config(options[:config_path])
         attach_config_policy!(input, config)
@@ -99,16 +99,15 @@ module TokenBarCLI
         input["model"] ||= default_model(input["providerID"])
         validate_usage_input!(input)
 
-        response = post_local_usage_ingest(options[:api_url], input)
-        raise Error, api_failure_message("Claude Code statusline ingestion requires the app API") unless response
+        result = post_local_usage_ingest(options[:api_url], input)
+        response = result.body
+        raise Error, result.failure_message("Claude Code statusline ingestion requires the app API") unless response
 
         if output_json
           puts JSON.pretty_generate(response)
         else
           print_claude_statusline(response)
         end
-      rescue JSON::ParserError => e
-        raise Error, "invalid Claude Code statusline JSON: #{e.message}"
       end
 
       def usage_codex_session(options, argv)
@@ -140,8 +139,9 @@ module TokenBarCLI
         attach_config_policy!(input, config)
         validate_usage_input!(input)
 
-        response = post_local_usage_ingest(options[:api_url], input)
-        raise Error, api_failure_message("Codex local usage ingestion requires the app API") unless response
+        result = post_local_usage_ingest(options[:api_url], input)
+        response = result.body
+        raise Error, result.failure_message("Codex local usage ingestion requires the app API") unless response
 
         if output_json
           puts JSON.pretty_generate(response)

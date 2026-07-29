@@ -62,14 +62,14 @@ enum ClaudeStatuslineParser {
 
     private static func stringValue(forAnyKey keys: [String], in object: Any) -> String? {
         guard let value = firstValue(forAnyKey: keys, in: object) else { return nil }
-        if let string = value as? String { return string.isEmpty ? nil : string }
-        return "\(value)"
+        guard let string = value as? String else { return nil }
+        return string.isEmpty ? nil : string
     }
 
     private static func intValue(forAnyKey keys: [String], in object: Any) -> Int? {
         guard let value = firstValue(forAnyKey: keys, in: object) else { return nil }
         if let int = value as? Int { return int }
-        if let double = value as? Double { return Int(double) }
+        if let double = value as? Double, double.isFinite { return Int(exactly: double) }
         if let string = value as? String { return Int(string) }
         return nil
     }
@@ -93,24 +93,44 @@ enum ClaudeStatuslineParser {
     }
 
     private static func firstValue(forAnyKey keys: [String], in object: Any) -> Any? {
-        if let dictionary = object as? [String: Any] {
+        for dictionary in candidateDictionaries(in: object) {
             for key in keys {
                 if let value = dictionary[key] {
                     return value
                 }
             }
-            for value in dictionary.values {
-                if let found = firstValue(forAnyKey: keys, in: value) {
-                    return found
-                }
-            }
-        } else if let array = object as? [Any] {
-            for value in array {
-                if let found = firstValue(forAnyKey: keys, in: value) {
-                    return found
-                }
-            }
         }
         return nil
+    }
+
+    /// Claude statusline payloads have used a small number of named
+    /// containers over time. Search those in a fixed order instead of walking
+    /// arbitrary dictionary values, whose iteration order can select an
+    /// unrelated same-named field.
+    private static func candidateDictionaries(in object: Any) -> [[String: Any]] {
+        guard let root = object as? [String: Any] else { return [] }
+        let containerPaths = [
+            ["usage"],
+            ["cost"],
+            ["context_window"],
+            ["contextWindow"],
+            ["rate_limits"],
+            ["rateLimits"],
+            ["workspace"],
+            ["session"],
+            ["data"],
+            ["data", "usage"]
+        ]
+        return [root] + containerPaths.compactMap { path in
+            var cursor: Any = root
+            for key in path {
+                guard let dictionary = cursor as? [String: Any],
+                      let next = dictionary[key] else {
+                    return nil
+                }
+                cursor = next
+            }
+            return cursor as? [String: Any]
+        }
     }
 }

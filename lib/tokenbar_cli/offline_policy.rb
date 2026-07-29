@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "time"
+require_relative "coercion"
 
 module TokenBarCLI
   module OfflinePolicy
@@ -66,6 +67,12 @@ module TokenBarCLI
         period: "monthly"
       )
 
+      model_is_unspecified = Coercion.blank?(input["model"]) || input["model"].to_s.casecmp("unspecified").zero?
+      if model_is_unspecified && status != "block"
+        status = "warn"
+        reasons << "No model has been selected yet."
+      end
+
       reasons << "Workspace, provider, model, and budget are inside policy." if reasons.empty?
       fallback = policy["allowedProviderIDs"].find { |provider| provider != input["providerID"] }
       timestamp = now.utc.iso8601
@@ -89,7 +96,7 @@ module TokenBarCLI
           "projectedDailySpend" => projected_daily_spend,
           "projectedMonthlySpend" => projected_monthly_spend,
           "reasons" => reasons,
-          "recommendation" => recommendation(status, input["model"], fallback),
+          "recommendation" => recommendation(status, input["model"], fallback, model_is_unspecified: model_is_unspecified),
           "fallbackProvider" => fallback,
           "timestamp" => timestamp
         }
@@ -108,14 +115,14 @@ module TokenBarCLI
         "name" => workspace["name"] || workspace["id"] || workspace_id,
         "pathHint" => workspace["path"] || workspace["pathHint"] || Dir.pwd,
         "client" => workspace["client"] || "local",
-        "dailyBudget" => numeric_config(budgets["daily"], 0),
-        "monthlyBudget" => numeric_config(budgets["monthly"], 0),
-        "spendToday" => numeric_config(budgets["spend_today"] || budgets["spendToday"], 0),
-        "spendMonth" => numeric_config(budgets["spend_month"] || budgets["spendMonth"], 0),
+        "dailyBudget" => Coercion.numeric(budgets["daily"], 0),
+        "monthlyBudget" => Coercion.numeric(budgets["monthly"], 0),
+        "spendToday" => Coercion.numeric(budgets["spend_today"] || budgets["spendToday"], 0),
+        "spendMonth" => Coercion.numeric(budgets["spend_month"] || budgets["spendMonth"], 0),
         "allowedProviderIDs" => Array(providers["allowed"]).map(&:to_s),
         "blockedModels" => Array(models["blocked"]).map(&:to_s),
-        "maxEstimatedRunCost" => numeric_config(budgets["max_run"] || budgets["maxEstimatedRunCost"], Float::INFINITY),
-        "maxEstimatedTokens" => integer_config(rules["max_estimated_tokens"] || rules["maxEstimatedTokens"], 0),
+        "maxEstimatedRunCost" => Coercion.numeric(budgets["max_run"] || budgets["maxEstimatedRunCost"], 0),
+        "maxEstimatedTokens" => Coercion.integer(rules["max_estimated_tokens"] || rules["maxEstimatedTokens"], 0),
         "requireCompanyKey" => providers["require_company_key"] == true || providers["requireCompanyKey"] == true,
         "preferredProviderID" => providers["preferred"],
         "preferredModel" => models["default"]
@@ -148,38 +155,24 @@ module TokenBarCLI
       COMPANY_MANAGED_KEY_SOURCES.include?(normalized)
     end
 
-    def recommendation(status, model, fallback)
+    def recommendation(status, model, fallback, model_is_unspecified:)
       case status
       when "allow"
         "Continue with #{model}. Keep the agent on this workspace policy."
       when "warn"
-        "Continue only if this run is necessary, or switch to #{fallback || "a cheaper allowed provider"} first."
+        if model_is_unspecified
+          "Select a configured model before running an agent."
+        else
+          "Continue only if this run is necessary, or switch to #{fallback || "a cheaper allowed provider"} first."
+        end
       else
         "Stop this run. Switch provider/model or raise the workspace budget after review."
       end
     end
 
-    def integer_config(value, fallback)
-      return fallback if value.nil?
-
-      Integer(value)
-    rescue ArgumentError, TypeError
-      fallback
-    end
-
-    def numeric_config(value, fallback)
-      return fallback if value.nil?
-
-      Float(value)
-    rescue ArgumentError, TypeError
-      fallback
-    end
-
     private_class_method :apply_budget_rule,
                          :company_key_required_but_unsatisfied?,
                          :company_managed_key_source?,
-                         :recommendation,
-                         :integer_config,
-                         :numeric_config
+                         :recommendation
   end
 end

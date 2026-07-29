@@ -95,6 +95,10 @@ module TokenBarCLI
           "smokeDecision" => {
             "status" => decision["status"],
             "reasons" => decision["reasons"]
+          },
+          "nextCheck" => {
+            "provider" => config.dig("providers", "preferred"),
+            "model" => config.dig("models", "default") || default_model(config.dig("providers", "preferred"))
           }
         }
 

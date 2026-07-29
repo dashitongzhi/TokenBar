@@ -2,7 +2,7 @@ import SwiftUI
 
 // Card structure adapted from codexU's RuntimeSummaryCard.
 // Copyright (c) 2026 Guomeiqing. Licensed under the MIT License.
-// See README.third-party-notices.md.
+// See THIRD_PARTY_NOTICES.md.
 struct CompactRuntimeSnapshotView: View {
     @EnvironmentObject private var appState: AppState
 

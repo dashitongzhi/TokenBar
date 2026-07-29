@@ -2,9 +2,11 @@
 
 module TokenBarCLI
   module CommandSupport
+    include Coercion
+
     def fetch_api_status(api_url)
-      health = http_get(api_url, "/health")
-      policy = http_get(api_url, "/policy")
+      health = api_get(api_url, "/health").body
+      policy = api_get(api_url, "/policy").body
       {
         "running" => !health.nil?,
         "url" => api_url,
@@ -14,45 +16,27 @@ module TokenBarCLI
     end
 
     def post_policy_evaluate(api_url, input)
-      post_json(api_url, "/policy/evaluate", input)
+      api_post(api_url, "/policy/evaluate", compact_hash(input))
     end
 
     def post_local_usage_ingest(api_url, input)
-      post_json(api_url, "/usage/ingest", compact_hash(input))
+      api_post(api_url, "/usage/ingest", compact_hash(input))
     end
 
     def post_smart_routing_run(api_url, input)
-      post_json(api_url, "/routing/runs", compact_hash(input))
+      api_post(api_url, "/routing/runs", compact_hash(input))
     end
 
     def fetch_smart_routing_stats(api_url)
-      http_get(api_url, "/routing/stats")
+      api_get(api_url, "/routing/stats")
     end
 
-    def post_json(api_url, path, input)
-      client = local_api_client(api_url)
-      response = client.post(path, input)
-      @last_api_error = client.last_error
-      response
+    def api_post(api_url, path, input)
+      api_session(api_url).post(path, input)
     end
 
-    def http_get(api_url, path)
-      client = local_api_client(api_url)
-      response = client.get(path)
-      @last_api_error = client.last_error
-      response
-    end
-
-    def api_failure_message(action)
-      @last_api_client&.failure_message(action) || "TokenBar app is not running; #{action}"
-    end
-
-    def local_api_client(api_url)
-      if @last_api_client.nil? || @last_api_client_url != api_url
-        @last_api_client = LocalAPIClient.new(api_url, token_paths: LOCAL_API_TOKEN_PATHS)
-        @last_api_client_url = api_url
-      end
-      @last_api_client
+    def api_get(api_url, path)
+      api_session(api_url).get(path)
     end
 
     def repo_root
@@ -133,21 +117,8 @@ module TokenBarCLI
     end
 
     def provider_from_model_or_agent(model, agent)
-      model = model.to_s.downcase
-      return "anthropic" if model.include?("claude")
-      return "openai" if model.include?("gpt") || model.match?(/\bo[134]\b/)
-      return "minimax" if model.include?("minimax")
-      return "deepseek" if model.include?("deepseek")
-      return "google" if model.include?("gemini")
-      return "mistral" if model.include?("mistral")
-      return "kimi" if model.include?("kimi")
-      return "xiaomi-mimo" if model.include?("mimo") || model.include?("xiaomi")
-      return "glm" if model.include?("glm")
-      return "qwen" if model.include?("qwen")
-      return "anthropic" if agent == "claudeCode"
-      return "openai" if agent == "codex"
-
-      nil
+      fallback = agent == "claudeCode" ? "anthropic" : agent == "codex" ? "openai" : nil
+      ProviderCatalog.provider_for(model: model, fallback: fallback)
     end
 
     def validate_check_input!(input)
@@ -160,17 +131,7 @@ module TokenBarCLI
     end
 
     def default_model(provider)
-      case provider
-      when "anthropic" then "claude-sonnet"
-      when "openai" then "gpt-5"
-      when "minimax" then "minimax-m1"
-      when "deepseek" then "deepseek-chat"
-      when "google" then "gemini-2.5-pro"
-      when "mistral" then "mistral-large-latest"
-      when "kimi" then "kimi-k2"
-      when "glm" then "glm-4.5"
-      else "unspecified"
-      end
+      ProviderCatalog.default_model(provider)
     end
 
     def offline_policy_response(input, config)
@@ -229,23 +190,15 @@ module TokenBarCLI
     end
 
     def integer_config(value, fallback)
-      return fallback if value.nil?
-
-      Integer(value)
-    rescue ArgumentError, TypeError
-      fallback
+      Coercion.integer(value, fallback)
     end
 
     def numeric_config(value, fallback)
-      return fallback if value.nil?
-
-      Float(value)
-    rescue ArgumentError, TypeError
-      fallback
+      Coercion.numeric(value, fallback)
     end
 
     def blank?(value)
-      value.nil? || value.to_s.strip.empty?
+      Coercion.blank?(value)
     end
   end
 end

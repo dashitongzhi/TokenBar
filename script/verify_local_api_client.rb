@@ -5,13 +5,15 @@ require "json"
 require "pathname"
 require "socket"
 require "tempfile"
+require "timeout"
 require_relative "../lib/tokenbar_cli/local_api_client"
 
 responses = [
   [401, { "error" => "unauthorized" }],
   [200, { "status" => "ok" }],
   [200, { "accepted" => true }],
-  [403, { "error" => "forbidden" }]
+  [403, { "error" => "forbidden" }],
+  [200, :invalid_json]
 ]
 requests = []
 server = TCPServer.new("127.0.0.1", 0)
@@ -32,7 +34,7 @@ server_thread = Thread.new do
     body = socket.read(headers.fetch("content-length", "0").to_i)
     requests << { "requestLine" => request_line, "headers" => headers, "body" => body }
 
-    response_body = JSON.generate(payload)
+    response_body = payload == :invalid_json ? "<html>not TokenBar</html>" : JSON.generate(payload)
     reason = status == 200 ? "OK" : status == 401 ? "Unauthorized" : "Forbidden"
     socket.write(
       "HTTP/1.1 #{status} #{reason}\r\n" \
@@ -85,11 +87,31 @@ unless forbidden.nil? && forbidden_client.last_error == "http_403" &&
   exit 1
 end
 
-server_thread.join
+invalid_json_client = TokenBarCLI::LocalAPIClient.new(
+  "http://127.0.0.1:#{port}",
+  token_paths: [],
+  env: {}
+)
+invalid_json = invalid_json_client.get("/health")
+unless invalid_json.nil? && invalid_json_client.last_error == "invalid_json" &&
+       invalid_json_client.failure_message("check the configured endpoint").include?("returned invalid JSON")
+  warn "Local API invalid JSON regression: response=#{invalid_json.inspect} error=#{invalid_json_client.last_error.inspect}"
+  exit 1
+end
+
+begin
+  TokenBarCLI::LocalAPIClient.new("127.0.0.1:3847", token_paths: [], env: {})
+  warn "Local API URL validation regression: URL without scheme was accepted"
+  exit 1
+rescue ArgumentError => e
+  raise unless e.message.include?("absolute http:// or https://")
+end
+
+Timeout.timeout(5) { server_thread.join }
 
 unless requests[0].dig("headers", "authorization") == "Bearer bad-token" &&
        requests[1].dig("headers", "authorization") == "Bearer good-token" &&
-       requests[1]["requestLine"] == "GET /health HTTP/1.1" &&
+       requests[1]["requestLine"] == "GET /ignored/health HTTP/1.1" &&
        requests[2].dig("headers", "content-type") == "application/json" &&
        JSON.parse(requests[2]["body"]) == { "workspaceID" => "client-smoke" }
   warn "Local API request contract regression: #{requests.inspect}"

@@ -14,6 +14,21 @@ module TokenBarCLI
         {}
       end
 
+      def read_required_stdin(label)
+        raise Error, "expected #{label} on stdin" if STDIN.tty?
+
+        raw = STDIN.read
+        raise Error, "expected #{label} on stdin" if blank?(raw)
+
+        raw
+      end
+
+      def read_required_stdin_json(label)
+        JSON.parse(read_required_stdin(label))
+      rescue JSON::ParserError => e
+        raise Error, "invalid #{label}: #{e.message}"
+      end
+
       def dig_path(value, keys)
         cursor = value
         keys.each do |key|

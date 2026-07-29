@@ -132,7 +132,7 @@ final class SmartRoutingLedgerStore {
     }
 
     private func save(_ records: [SmartRoutingRunRecord]) {
-        try? document.save(records)
+        document.saveRecovering(records)
     }
 
     private func pruned(_ records: [SmartRoutingRunRecord], now: Date) -> [SmartRoutingRunRecord] {

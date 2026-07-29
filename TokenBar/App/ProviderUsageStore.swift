@@ -42,7 +42,7 @@ struct ProviderUsageStore {
     }
 
     func save(_ providers: [ProviderUsage]) {
-        try? document.save(providers)
+        document.saveRecovering(providers)
     }
 
     private static func normalized(_ providers: [ProviderUsage]) -> [ProviderUsage] {

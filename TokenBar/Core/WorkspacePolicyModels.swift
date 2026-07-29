@@ -228,6 +228,50 @@ struct PolicyDecision: Identifiable, Codable, Equatable {
     var fallbackProviderID: String?
     var routingMode: RoutingMode = .guardOnly
     var smartRoutingRecommendation: SmartRoutingRecommendation? = nil
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case timestamp
+        case status
+        case agent
+        case workspaceID
+        case workspaceName
+        case providerID
+        case model
+        case estimatedCost
+        case projectedDailySpend
+        case projectedMonthlySpend
+        case reasons
+        case recommendation
+        case fallbackProviderID
+        case routingMode
+        case smartRoutingRecommendation
+    }
+}
+
+extension PolicyDecision {
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        timestamp = try container.decode(Date.self, forKey: .timestamp)
+        status = try container.decode(PolicyDecisionStatus.self, forKey: .status)
+        agent = try container.decode(AgentProvider.self, forKey: .agent)
+        workspaceID = try container.decode(String.self, forKey: .workspaceID)
+        workspaceName = try container.decode(String.self, forKey: .workspaceName)
+        providerID = try container.decode(String.self, forKey: .providerID)
+        model = try container.decode(String.self, forKey: .model)
+        estimatedCost = try container.decode(Double.self, forKey: .estimatedCost)
+        projectedDailySpend = try container.decode(Double.self, forKey: .projectedDailySpend)
+        projectedMonthlySpend = try container.decode(Double.self, forKey: .projectedMonthlySpend)
+        reasons = try container.decode([String].self, forKey: .reasons)
+        recommendation = try container.decode(String.self, forKey: .recommendation)
+        fallbackProviderID = try container.decodeIfPresent(String.self, forKey: .fallbackProviderID)
+        routingMode = try container.decodeIfPresent(RoutingMode.self, forKey: .routingMode) ?? .guardOnly
+        smartRoutingRecommendation = try container.decodeIfPresent(
+            SmartRoutingRecommendation.self,
+            forKey: .smartRoutingRecommendation
+        )
+    }
 }
 
 struct UsageSummary: Identifiable, Equatable {

@@ -1,6 +1,18 @@
 import Foundation
 
 enum L10n {
+    static var hasMatchingLanguageKeys: Bool {
+        Set(english.keys) == Set(chinese.keys)
+    }
+
+    static var missingChineseKeys: [String] {
+        Array(Set(english.keys).subtracting(chinese.keys)).sorted()
+    }
+
+    static var missingEnglishKeys: [String] {
+        Array(Set(chinese.keys).subtracting(english.keys)).sorted()
+    }
+
     static func t(_ key: String, _ language: AppLanguage) -> String {
         switch language {
         case .english:
@@ -47,6 +59,8 @@ enum L10n {
         "localFirst": "Local-first. Keys stay in Keychain.",
         "mcp": "Local API",
         "mcpCaption": "AI agents can read quota signals from localhost when enabled.",
+        "ccSwitchLiveQuotaProbes": "CC Switch live quota probes",
+        "ccSwitchLiveQuotaProbesCaption": "When enabled, TokenBar sends each provider's CC Switch key only to that provider's verified official HTTPS endpoint to fetch live balance or quota data.",
         "openSettings": "Open Settings",
         "noProvider": "No provider selected",
         "allProviders": "All Providers",
@@ -228,6 +242,8 @@ enum L10n {
         "localFirst": "本地优先，密钥只进 Keychain。",
         "mcp": "本地 API",
         "mcpCaption": "启用后，AI Agent 可从 localhost 读取额度信号。",
+        "ccSwitchLiveQuotaProbes": "CC Switch 实时额度探测",
+        "ccSwitchLiveQuotaProbesCaption": "启用后，TokenBar 仅把各供应商自己的 CC Switch 密钥发送到已校验的该供应商官方 HTTPS 端点，以读取实时余额或额度。",
         "openSettings": "打开设置",
         "noProvider": "未选择平台",
         "allProviders": "所有平台",

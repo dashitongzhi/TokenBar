@@ -45,7 +45,7 @@ extension AppState {
     var mostUrgentProvider: ProviderUsage? {
         providers.sorted {
             if $0.status != $1.status {
-                return statusRank($0.status) > statusRank($1.status)
+                return $0.status.rank > $1.status.rank
             }
             return $0.usageRatio > $1.usageRatio
         }.first
@@ -76,11 +76,20 @@ extension AppState {
     }
 
     var dailySummary: UsageSummary {
-        usageSummary(id: "daily", title: localized("daily"), multiplier: 1, requestDivisor: 1)
+        UsageSummary(
+            id: "daily",
+            title: localized("daily"),
+            spend: totalSpendToday,
+            tokens: providers.reduce(0) { $0 + $1.todayTokenCount },
+            requests: providers.reduce(0) { $0 + ($1.knownTodayRequestCount ?? 0) },
+            projectedSpend: 0
+        )
     }
 
     var weeklySummary: UsageSummary {
-        usageSummary(id: "weekly", title: localized("weekly"), multiplier: 7, requestDivisor: 4)
+        // TokenBar does not persist a seven-day ledger yet. Keep unavailable
+        // values empty instead of presenting extrapolated daily figures as facts.
+        UsageSummary(id: "weekly", title: localized("weekly"), spend: 0, tokens: 0, requests: 0, projectedSpend: 0)
     }
 
     var monthlySummary: UsageSummary {
@@ -88,9 +97,9 @@ extension AppState {
             id: "monthly",
             title: localized("monthly"),
             spend: totalSpendMonth,
-            tokens: providers.reduce(0) { $0 + $1.current },
+            tokens: modelUsageRollups.reduce(0) { $0 + $1.tokensMonth },
             requests: providers.reduce(0) { $0 + ($1.knownRequestCount ?? 0) },
-            projectedSpend: totalSpendToday * 30
+            projectedSpend: 0
         )
     }
 
@@ -160,16 +169,6 @@ extension AppState {
         }
     }
 
-    func statusBarColor() -> NSColor {
-        switch statusBarContent {
-        case .guardDecision: return policyStatus.nsColor
-        case .activeWorkspace: return selectedWorkspace?.status.nsColor ?? .controlAccentColor
-        case .sessionBudget: return budgetStatus.nsColor
-        case .totalSpend: return mostUrgentProvider?.status.nsColor ?? .controlAccentColor
-        case .customText, .iconOnly: return selectedProvider?.status.nsColor ?? .controlAccentColor
-        }
-    }
-
     func statusBarSymbolName() -> String {
         switch statusBarContent {
         case .guardDecision: return currentDecision.status.symbolName
@@ -229,18 +228,4 @@ extension AppState {
         return "\(Int(seconds / 86_400))d"
     }
 
-    private func usageSummary(id: String, title: String, multiplier: Double, requestDivisor: Double) -> UsageSummary {
-        let spend = totalSpendToday * multiplier
-        let tokens = providers.reduce(0) { $0 + ($1.todayTokenCount > 0 ? $1.todayTokenCount * multiplier : $1.burnRatePerHour * 24 * multiplier) }
-        let requests = providers.reduce(0) { $0 + Int(Double($1.knownTodayRequestCount ?? 0) * multiplier / requestDivisor) }
-        return UsageSummary(id: id, title: title, spend: spend, tokens: tokens, requests: requests, projectedSpend: spend * 1.12)
-    }
-
-    private func statusRank(_ status: UsageStatus) -> Int {
-        switch status {
-        case .healthy: 0
-        case .warning: 1
-        case .critical: 2
-        }
-    }
 }
