@@ -1,0 +1,13 @@
+:root {
+  font-family: "SF Pro Display", "PingFang SC", "Hiragino Sans GB", Arial, sans-serif;
+  color: #f4f8fb;
+  background: #05090f;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}

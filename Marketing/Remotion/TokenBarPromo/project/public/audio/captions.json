@@ -1,0 +1,163 @@
+[
+  {
+    "text": "AI 编程代理执行得越来越快，",
+    "startMs": 100,
+    "endMs": 3068,
+    "timestampMs": null,
+    "confidence": null
+  },
+  {
+    "text": "但一次错误的工作区、模型或预算判断，",
+    "startMs": 3068,
+    "endMs": 6629,
+    "timestampMs": null,
+    "confidence": null
+  },
+  {
+    "text": "就可能在几秒内带来真实成本。",
+    "startMs": 6629,
+    "endMs": 9399,
+    "timestampMs": null,
+    "confidence": null
+  },
+  {
+    "text": "TokenBar 是 macOS 菜单栏里的本地策略闸门。",
+    "startMs": 9399,
+    "endMs": 13689,
+    "timestampMs": null,
+    "confidence": null
+  },
+  {
+    "text": "在 Agent 真正触碰仓库和供应商额度之前，",
+    "startMs": 13689,
+    "endMs": 17542,
+    "timestampMs": null,
+    "confidence": null
+  },
+  {
+    "text": "它先检查工作区、供应商、模型、公司 Key、单次成本与预算投影，",
+    "startMs": 17542,
+    "endMs": 22902,
+    "timestampMs": null,
+    "confidence": null
+  },
+  {
+    "text": "并给出 ALLOW、WARN 或 BLOCK。",
+    "startMs": 22902,
+    "endMs": 26754,
+    "timestampMs": null,
+    "confidence": null
+  },
+  {
+    "text": "你可以在守卫面板完成一次运行前检查，",
+    "startMs": 26754,
+    "endMs": 30492,
+    "timestampMs": null,
+    "confidence": null
+  },
+  {
+    "text": "清楚看到当前决定、原因、预计花费和回退方案。",
+    "startMs": 30492,
+    "endMs": 35060,
+    "timestampMs": null,
+    "confidence": null
+  },
+  {
+    "text": "OpenAI、Anthropic、OpenRouter、MiniMax、Codex 与本地代理用量，",
+    "startMs": 35060,
+    "endMs": 42065,
+    "timestampMs": null,
+    "confidence": null
+  },
+  {
+    "text": "被汇总到一个真实的状态界面。",
+    "startMs": 42065,
+    "endMs": 44026,
+    "timestampMs": null,
+    "confidence": null
+  },
+  {
+    "text": "每个仓库都能用 tokenbar.yml 携带自己的策略，",
+    "startMs": 44026,
+    "endMs": 49479,
+    "timestampMs": null,
+    "confidence": null
+  },
+  {
+    "text": "设置允许的供应商、首选模型、单次上限、日预算与月预算。",
+    "startMs": 49479,
+    "endMs": 54555,
+    "timestampMs": null,
+    "confidence": null
+  },
+  {
+    "text": "CLI、本地 API，",
+    "startMs": 54555,
+    "endMs": 56102,
+    "timestampMs": null,
+    "confidence": null
+  },
+  {
+    "text": "以及 Codex 和 Claude Code hooks，",
+    "startMs": 56102,
+    "endMs": 60180,
+    "timestampMs": null,
+    "confidence": null
+  },
+  {
+    "text": "共享同一套策略引擎。",
+    "startMs": 60180,
+    "endMs": 61586,
+    "timestampMs": null,
+    "confidence": null
+  },
+  {
+    "text": "数据处理保持本地优先，",
+    "startMs": 61586,
+    "endMs": 63798,
+    "timestampMs": null,
+    "confidence": null
+  },
+  {
+    "text": "API 只监听 127.0.0.1，",
+    "startMs": 63798,
+    "endMs": 67417,
+    "timestampMs": null,
+    "confidence": null
+  },
+  {
+    "text": "缺失数据也不会被伪装成零成本。",
+    "startMs": 67417,
+    "endMs": 70432,
+    "timestampMs": null,
+    "confidence": null
+  },
+  {
+    "text": "TokenBar 为每次 Agent 运行给出清晰结论：",
+    "startMs": 70432,
+    "endMs": 75180,
+    "timestampMs": null,
+    "confidence": null
+  },
+  {
+    "text": "允许、提醒或阻止。",
+    "startMs": 75180,
+    "endMs": 76706,
+    "timestampMs": null,
+    "confidence": null
+  },
+  {
+    "text": "策略先行，",
+    "startMs": 76706,
+    "endMs": 77956,
+    "timestampMs": null,
+    "confidence": null
+  },
+  {
+    "text": "执行更稳。",
+    "startMs": 77956,
+    "endMs": 79206,
+    "timestampMs": null,
+    "confidence": null
+  }
+]
